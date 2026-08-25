@@ -159,6 +159,44 @@ _Any approved divergence, with the reason and the approving message._
 ### ADR-019 · 2026-08-25 · Carried without a separate ask
 `httpx` added as a dev dependency: `fastapi.testclient` requires it, and there is no way to test an HTTP endpoint on the already-chosen framework without it. Same "mechanical consequence" reasoning as `uvicorn`, `pytest-asyncio` and `pytest-cov` in ADR-011. Note the tests use `httpx.AsyncClient` + `ASGITransport` rather than `TestClient` — `TestClient` runs its own event loop, which strands the asyncpg pool created on pytest-asyncio's loop, and Starlette now deprecates the `TestClient`/httpx pairing anyway.
 
+### ADR-020 · 2026-08-25 · Rule pack storage
+**Decision:** `prayas/gate/rules/*.yaml` is the source of truth; an Alembic migration loads it into `compliance_rules`; the gate reads the table at runtime. A test asserts YAML and table agree.
+**Options:** YAML→table by migration; table-only seeded by migration; YAML-only at runtime.
+**Rationale:** Makes §30.1's claim literally true — "a regulatory change is a data migration reviewable by a non-engineer". D7 open-sources the rule pack, and a YAML diff is what a compliance reviewer can actually read. The exit criterion "gate returns DENY when the rule store is unreachable" presumes a store that *can* be unreachable, which a local file is not.
+
+### ADR-021 · 2026-08-25 · AFA cap reference data
+**Decision:** New `regulatory_reference` table (mcc, cap_paise, regulator, citation, as_of), loaded from the same rule pack. Global, not tenant-scoped.
+**Options:** reference table from rule pack; extra rules in `compliance_rules`; hardcoded in `ALLOWED_FUNCS`.
+**Rationale:** The ₹15,000 / ₹1,00,000 thresholds are regulatory facts, so Invariant 10 demands a citation and `as_of` exactly as the predicates do. Encoding them as rules is blocked by the sandbox itself — §30.3's whitelist has no `ast.In`, so a predicate cannot express `mcc in exempt_list`, and one rule per exempt MCC would bury the audit record in near-duplicates. Hardcoding would make a regulator's change a deploy rather than a data migration.
+
+### ADR-022 · 2026-08-25 · Chain verifier execution
+**Decision:** Verification as a pure library function, a `python -m prayas.ledger.verify` entrypoint, and a Compose service looping on an interval.
+**Options:** library+CLI+Compose; in-process asyncio task; library plus on-demand endpoint only.
+**Rationale:** §15 catalogues `chain-verifier` as its own component; the Playbook wants it running continuously. An in-process task would compete with request handling on the API's event loop and duplicate work across replicas. Production scheduling stays a Phase 15 decision.
+
+### ADR-023 · 2026-08-25 · Mutation testing
+**Decision:** `mutmut`, scoped to `prayas/gate/`, as a separate nightly CI job.
+**Options:** mutmut; cosmic-ray; mutatest.
+**Rationale:** Scope matches the exit criterion's wording and keeps runtime tractable — mutation testing is far too slow to point at the whole codebase per commit, and §40.1 already puts slow tiers on a nightly cadence. mutatest's smaller mutation catalogue risks missing boundary and comparison-operator mutations, which are precisely the class this criterion exists to catch.
+
+### ADR-024 · 2026-08-25 · Ledger genesis constant
+**Decision:** `GENESIS = "0" * 64`, defined once in `prayas/ledger/chain.py` and never changed.
+**Rationale:** §32 references `GENESIS` as the first record's `prev_hash` but never defines it. Any fixed value works; what matters is that it is fixed, since changing it would invalidate every existing chain. Recorded as an ADR rather than left as a constant precisely so nobody "tidies" it later.
+**Not asked:** no alternative changes behaviour, so this was a conventional default rather than a decision.
+
+### ADR-025 · 2026-08-25 · Predicate sandbox whitelist
+**Decision:** §30.3's 22-node whitelist verbatim, plus three hardening additions. Surfaced by the `guard.sh` PreToolUse hook, which blocked the write until approved — the control working as designed.
+**Additions beyond §30.3's sketch:**
+1. `isinstance(result, bool)` check. Without it a predicate returning `"yes"` or `[]` would let Python truthiness decide a compliance verdict.
+2. `afa_free_cap` injected per evaluation from `regulatory_reference` rather than a static dict (follows ADR-021).
+3. `hours_since(None)` returns `-inf` rather than raising, so `hours_since(pdn_sent_at) >= 24` cleanly evaluates False for a missing PDN.
+**Deliberately absent:** `ast.Attribute` (kills `().__class__.__bases__[0].__subclasses__()`), `Subscript`, `ListComp`, `Lambda`, `JoinedStr`, `NamedExpr`, `Pow`, `Starred`.
+**Known residual:** `Mult` is permitted per §30.3, so `'x' * 999999999` inside a stored predicate could allocate before any comparison. Rules are reviewed data, so exposure is low; narrowing was offered and declined in favour of spec fidelity.
+**Note:** the hook has no approved-state mechanism, so this one file was written via shell after approval. The hook remains armed and was re-verified blocking afterwards.
+
+### ADR-026 · 2026-08-25 · Carried without a separate ask
+`PyYAML` promoted to a declared runtime dependency. ADR-020 chose YAML as the rule-pack format and migrations must parse it, so this is a mechanical consequence rather than a choice — same reasoning as `uvicorn` (ADR-011) and `httpx` (ADR-019). It was previously present only transitively, which is not something to rely on.
+
 ## Spec errata found (documentation only, no code impact)
 - §18 cites "§34.4" for isolation-as-correctness; §34 is *Estimators* and has no subsections. Correct target is **§40.4**.
 - §18 cites "(§27)" for per-tenant audit chains; §27 is *Cross-tenant learning*. Per-tenant chains are specified in **§32**.

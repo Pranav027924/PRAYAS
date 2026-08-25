@@ -45,6 +45,7 @@ GLOBAL_TABLES: Final[frozenset[str]] = frozenset(
     {
         "segment_priors",  # k-anonymised aggregates, no PII (§27, Invariant 8)
         "compliance_rules",  # the rule pack is global (§30.1)
+        "regulatory_reference",  # AFA ceilings are set by the RBI, not per merchant (ADR-021)
         "issuer_health",  # keyed by issuer and rail, not by tenant (§21)
     }
 )
