@@ -1,14 +1,14 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 1 — Event spine
+Phase 2 — Trust layer
 
 ## Phase status
 | # | Phase | Status | Closed on |
 |---|---|---|---|
 | 0 | Foundations | CLOSED | 2026-08-25 |
-| 1 | Event spine | IN PROGRESS | — |
-| 2 | Trust layer | not started | — |
+| 1 | Event spine | CLOSED | 2026-08-25 |
+| 2 | Trust layer | IN PROGRESS | — |
 | 3 | Simulator | not started | — |
 | 4 | V0 intelligence | not started | — |
 | 5 | Sequencer | not started | — |
@@ -17,13 +17,21 @@ Phase 1 — Event spine
 | 8 | FIRST DEFENSIBLE NUMBER | not started | — |
 | 9–19 | see Execution Playbook | not started | — |
 
-## Exit criteria — current phase (Phase 1 — Event spine)
-- [ ] Same event delivered 100× produces exactly one state transition
-- [ ] Every permutation of a fixed event set converges to identical state (property test)
-- [ ] `failed → captured` sequence leaves zero pending actions
-- [ ] Unverified payloads are rejected and never persisted
+## Exit criteria — current phase (Phase 2 — Trust layer)
+- [ ] Tampering with any ledger field is detected by the verifier
+- [ ] Every rule has a unit test covering both sides of its boundary
+- [ ] `safe_eval` rejects `__import__`, attribute access, comprehensions, lambdas
+- [ ] Gate returns DENY when the rule store is unreachable
+- [ ] Mutation testing on gate predicates: no surviving mutants
 
 ## Closed phases
+
+### Phase 1 — Event spine · closed 2026-08-25 · tag `phase-1-complete`
+- [x] Same event 100× → exactly one transition — 100 deliveries produced 1 `events_raw` row and `attempts_used == 1`; asserts projected state, not just row count
+- [x] Every permutation converges — all **5,040** orderings of the fixed event set enumerated exhaustively, plus 200 Hypothesis-generated interleavings; converged values pinned so consistent-but-wrong fails
+- [x] `failed → captured` leaves zero pending actions — pending = 0, cycle state `succeeded`
+- [x] Unverified payloads rejected and never persisted — 4 forgery variants (wrong, empty, truncated, foreign-secret) → 401 with `events_raw` count 0; body tampering after signing also rejected
+- Gates: 161 tests, coverage 90.35% (floor 85), mypy --strict clean, ruff clean
 
 ### Phase 0 — Foundations · closed 2026-08-25 · tag `phase-0-complete`
 - [x] `docker compose up` from a clean clone — postgres healthy, migrate exited 0, api healthy; `/health` → 200 `{"status":"ok","database":"ok"}`; 40 tables; revision `0004_tenants_rls`
