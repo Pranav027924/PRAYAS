@@ -1,0 +1,62 @@
+# Phase 0 exit criterion: `docker compose up` produces a working stack from a
+# clean clone. Ordering is postgres → migrate → api, each gated on the previous
+# actually being ready, so `docker compose up --wait` is a genuine verification
+# rather than a race.
+
+services:
+  postgres:
+    image: postgres:16-alpine # ADR-002
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-prayas}
+      POSTGRES_USER: ${POSTGRES_OWNER_USER:-prayas_owner}
+      POSTGRES_PASSWORD: ${POSTGRES_OWNER_PASSWORD:-prayas_local_dev_only}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_OWNER_USER:-prayas_owner} -d ${POSTGRES_DB:-prayas}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  # Runs as the OWNER role. Migrations hold DDL rights; the app never does.
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      PRAYAS_ENV: ${PRAYAS_ENV:-local}
+      PRAYAS_APP_DB_PASSWORD: ${POSTGRES_APP_PASSWORD:-prayas_local_dev_only}
+      PRAYAS_DATABASE_URL_OWNER: postgresql+asyncpg://${POSTGRES_OWNER_USER:-prayas_owner}:${POSTGRES_OWNER_PASSWORD:-prayas_local_dev_only}@postgres:5432/${POSTGRES_DB:-prayas}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # Runs as the APP role: owns nothing, subject to RLS unconditionally (ADR-004).
+  api:
+    build: .
+    environment:
+      PRAYAS_ENV: ${PRAYAS_ENV:-local}
+      PRAYAS_LOG_LEVEL: ${PRAYAS_LOG_LEVEL:-INFO}
+      PRAYAS_DATABASE_URL_APP: postgresql+asyncpg://${POSTGRES_APP_USER:-prayas_app}:${POSTGRES_APP_PASSWORD:-prayas_local_dev_only}@postgres:5432/${POSTGRES_DB:-prayas}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status==200 else 1)\"",
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+volumes:
+  pgdata:

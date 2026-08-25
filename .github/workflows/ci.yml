@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  POSTGRES_DB: prayas
+  POSTGRES_OWNER_USER: prayas_owner
+  POSTGRES_OWNER_PASSWORD: ci_only_not_a_secret
+  POSTGRES_APP_PASSWORD: ci_only_not_a_secret
+
+jobs:
+  # Exit criterion: CI green on an empty feature set — lint, types, tests, coverage.
+  quality:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine # ADR-002
+        env:
+          POSTGRES_DB: prayas
+          POSTGRES_USER: prayas_owner
+          POSTGRES_PASSWORD: ci_only_not_a_secret
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U prayas_owner -d prayas"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
+    env:
+      PRAYAS_ENV: ci
+      PRAYAS_APP_DB_PASSWORD: ci_only_not_a_secret
+      PRAYAS_DATABASE_URL_OWNER: postgresql+asyncpg://prayas_owner:ci_only_not_a_secret@localhost:5432/prayas
+      PRAYAS_DATABASE_URL_APP: postgresql+asyncpg://prayas_app:ci_only_not_a_secret@localhost:5432/prayas
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv # ADR-001
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv python install 3.12
+      - run: uv sync --all-extras --dev
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy --strict prayas tests
+
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+
+      - name: Tests with coverage floor # ADR-009: fail_under = 85
+        run: uv run pytest --cov --cov-report=term-missing --cov-report=xml
+
+      # Audits the resolved lockfile rather than the installed environment:
+      # the local `prayas` distribution is editable and not on PyPI, which
+      # pip-audit treats as an error under --strict.
+      - name: Dependency vulnerability scan # ADR-009
+        run: |
+          uv export --no-emit-project --format requirements-txt > /tmp/requirements.txt
+          uv run pip-audit --strict -r /tmp/requirements.txt
+
+  # Exit criterion: `docker compose up` produces a working stack from a clean clone.
+  # Deliberately a separate job on a fresh checkout — "works in the test job" is
+  # not the same claim.
+  compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bring the stack up from a clean clone
+        run: docker compose up --build --wait --wait-timeout 180
+
+      - name: Health endpoint answers
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/health)
+          echo "health returned $code"
+          test "$code" = "200"
+
+      - name: Stack logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
