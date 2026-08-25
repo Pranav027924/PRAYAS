@@ -7,9 +7,13 @@ without Docker still runs the unit tests.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from sqlalchemy import text
@@ -140,16 +144,94 @@ async def _seed_tenant(conn: AsyncConnection, tenant: str) -> None:
         ),
         params,
     )
+    await conn.execute(
+        text("INSERT INTO webhook_secrets (tenant_id, secret_ref) VALUES (:t, 'WH_SEED_V1')"),
+        params,
+    )
 
 
 async def _truncate_all(conn: AsyncConnection) -> None:
     await conn.execute(
         text(
-            "TRUNCATE experiment_config, outbox, scheduled_actions, decisions,"
-            " customer_profiles, interventions, attempts, cycles, mandates,"
+            "TRUNCATE webhook_secrets, experiment_config, outbox, scheduled_actions,"
+            " decisions, customer_profiles, interventions, attempts, cycles, mandates,"
             " events_raw, tenants RESTART IDENTITY CASCADE"
         )
     )
+
+
+WEBHOOK_SECRET_REF = "WH_TEST_V1"
+WEBHOOK_SECRET = "test_webhook_secret_material"
+
+
+def sign(raw_body: bytes, secret: str = WEBHOOK_SECRET) -> str:
+    """Produce the signature Razorpay would send for this exact byte sequence."""
+    return hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+
+
+def razorpay_event(
+    *,
+    event_id: str,
+    event_type: str,
+    mandate_id: str,
+    invoice_id: str | None = None,
+    amount_paise: int = 49900,
+    created_at: int = 1_767_225_600,  # 2026-01-01T00:00:00Z, fixed for determinism
+    next_billing_at: int = 1_769_904_000,  # 2026-02-01T00:00:00Z
+) -> bytes:
+    """A Razorpay-shaped webhook body, serialised exactly once.
+
+    Returned as bytes because the signature is over bytes; a test that
+    re-serialises would not be testing what production verifies.
+    """
+    body: dict[str, Any] = {
+        "entity": "event",
+        "event": event_type,
+        "created_at": created_at,
+        "contains": ["payment", "subscription"],
+        "payload": {
+            "subscription": {"entity": {"id": mandate_id, "current_end": next_billing_at}},
+            "payment": {
+                "entity": {
+                    "id": event_id + "_pay",
+                    "amount": amount_paise,
+                    "invoice_id": invoice_id or f"{mandate_id}_inv1",
+                }
+            },
+        },
+    }
+    return json.dumps(body, separators=(",", ":")).encode()
+
+
+@pytest.fixture
+async def webhook_tenant(
+    owner_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[str]:
+    """A tenant with an active webhook secret ref and its material in the env."""
+    monkeypatch.setenv(f"PRAYAS_WEBHOOK_SECRET_{WEBHOOK_SECRET_REF}", WEBHOOK_SECRET)
+
+    async with owner_engine.begin() as conn:
+        await _truncate_all(conn)
+        await conn.execute(
+            text("INSERT INTO tenants (tenant_id, name) VALUES (:t, :t)"), {"t": TENANT_A}
+        )
+        await conn.execute(
+            text("INSERT INTO webhook_secrets (tenant_id, secret_ref) VALUES (:t, :ref)"),
+            {"t": TENANT_A, "ref": WEBHOOK_SECRET_REF},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO mandates (mandate_id, tenant_id, customer_id, rail,"
+                " max_amount_paise, state, consent_ref, created_at)"
+                " VALUES (:m, :t, 'cust_1', 'upi_autopay', 1500000, 'active', 'c1', now())"
+            ),
+            {"m": f"{TENANT_A}_mnd", "t": TENANT_A},
+        )
+
+    yield TENANT_A
+
+    async with owner_engine.begin() as conn:
+        await _truncate_all(conn)
 
 
 @pytest.fixture

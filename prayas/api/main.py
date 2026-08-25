@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from prayas.api.webhooks import router as webhooks_router
 from prayas.config import Settings
 from prayas.db.engine import create_app_engine
 from prayas.observability.logging import configure
@@ -41,6 +42,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Prayas", version="0.0.0", lifespan=lifespan)
+app.include_router(webhooks_router)
 
 
 @app.get("/health")

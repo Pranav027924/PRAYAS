@@ -35,6 +35,8 @@ TENANT_SCOPED_TABLES: Final[frozenset[str]] = frozenset(
         "scheduled_actions",
         "outbox",
         "experiment_config",
+        # ADR-014. Holds secret *references*, never secret material.
+        "webhook_secrets",
     }
 )
 
