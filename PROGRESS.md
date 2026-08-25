@@ -1,13 +1,13 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 0 — Foundations
+Phase 1 — Event spine
 
 ## Phase status
 | # | Phase | Status | Closed on |
 |---|---|---|---|
-| 0 | Foundations | IN PROGRESS | — |
-| 1 | Event spine | not started | — |
+| 0 | Foundations | CLOSED | 2026-08-25 |
+| 1 | Event spine | IN PROGRESS | — |
 | 2 | Trust layer | not started | — |
 | 3 | Simulator | not started | — |
 | 4 | V0 intelligence | not started | — |
@@ -17,11 +17,19 @@ Phase 0 — Foundations
 | 8 | FIRST DEFENSIBLE NUMBER | not started | — |
 | 9–19 | see Execution Playbook | not started | — |
 
-## Exit criteria — current phase
-- [ ] `docker compose up` works from a clean clone
-- [ ] Migrations run forward and backward
-- [ ] Tenant isolation test passes on every tenant-scoped table
-- [ ] CI green: ruff, mypy --strict, pytest
+## Exit criteria — current phase (Phase 1 — Event spine)
+- [ ] Same event delivered 100× produces exactly one state transition
+- [ ] Every permutation of a fixed event set converges to identical state (property test)
+- [ ] `failed → captured` sequence leaves zero pending actions
+- [ ] Unverified payloads are rejected and never persisted
+
+## Closed phases
+
+### Phase 0 — Foundations · closed 2026-08-25 · tag `phase-0-complete`
+- [x] `docker compose up` from a clean clone — postgres healthy, migrate exited 0, api healthy; `/health` → 200 `{"status":"ok","database":"ok"}`; 40 tables; revision `0004_tenants_rls`
+- [x] Migrations forward and backward — 4 applied → 4 reversed → 4 applied; schema snapshot identical across both `head` states
+- [x] Tenant isolation on every tenant-scoped table — 35 isolation tests pass, including an `information_schema` metatest that fails when a table carrying `tenant_id` is unregistered or unpoliced. App role verified `rolsuper=f`, `rolbypassrls=f`, owns nothing
+- [x] CI green on an empty feature set — ruff, ruff format, mypy --strict, pip-audit (no known vulnerabilities), 88 tests, coverage 91.94% against an 85% floor
 
 ## Decisions taken
 _Appended as ADRs. Format: date · decision · options considered · rationale._
