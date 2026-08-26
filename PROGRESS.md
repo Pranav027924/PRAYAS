@@ -1,7 +1,7 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 4 — V0 intelligence
+Phase 5 — Sequencer
 
 ## Phase status
 | # | Phase | Status | Closed on |
@@ -10,17 +10,29 @@ Phase 4 — V0 intelligence
 | 1 | Event spine | CLOSED | 2026-08-25 |
 | 2 | Trust layer | CLOSED | 2026-08-26 |
 | 3 | Simulator | CLOSED | 2026-08-26 |
-| 4 | V0 intelligence | IN PROGRESS | — |
-| 5 | Sequencer | not started | — |
+| 4 | V0 intelligence | CLOSED | 2026-08-26 |
+| 5 | Sequencer | IN PROGRESS | — |
 | 6 | Executor | not started | — |
 | 7 | Measurement plane | not started | — |
 | 8 | FIRST DEFENSIBLE NUMBER | not started | — |
 | 9–19 | see Execution Playbook | not started | — |
 
-## Exit criteria — current phase (Phase 4 — V0 intelligence)
+## Exit criteria — current phase (Phase 5 — Sequencer)
 _To be read from the Execution Playbook at phase start._
 
 ## Closed phases
+
+### Phase 4 — V0 intelligence · closed 2026-08-26 · tag `phase-4-complete`
+- [x] V0 hazard beats a uniform prior by log-loss — measured on a held-out fold, with the margin pinned so a regression that stays merely "better" still fails
+- [x] ECE below 0.05 on held-out data — plus a deliberately miscalibrated model asserted to *exceed* the threshold, so the metric cannot pass vacuously by returning ~0 for everything
+- [x] **Conditional `p(t|t_last)` verified against simulator ground truth** — checked at four `t_last` values against the empirically observed frequency among genuine survivors, and separately shown that using the **marginal** is *further from reality*, not merely different (§21's "systematically wrong stopping points")
+- Artifact: salaried-1st hazard curve peaks at `h(0) > 0.5`, more than 5× any later slot — a curve that visibly peaks on payday
+- §20 confusion matrix against ground truth: 91.1% accuracy on specifically-coded failures
+- Gates: 501 tests, coverage 89.65% (floor 85), mypy --strict clean, ruff clean
+
+**Recorded weakness (not a blocker):** V0 cannot separate causes hiding behind code 05 — `fraud_hold` surfacing as 05 is classified `no_funds` 100% of the time. This is the documented reason §20 wants EM in Phase 11.
+
+**Recorded simulator gap (see ADR-035):** the 05 population is ~98% `no_funds`, not the ~50% §20 describes, because `issuer_degraded` deterministically emits 91 and never masquerades as 05. Overall accuracy is therefore *identical* at `mask_05_rate` 0.0 and 1.0 (0.911 both). V0 looks better on 05 than a realistic mix would allow.
 
 ### Phase 3 — Simulator · closed 2026-08-26 · tag `phase-3-complete`
 - [x] Distributions match configured parameters — payday mix, rail mix and `mask_05_rate` each within ±0.03 over 4,000 cycles, plus both boundary extremes (0.0 and 1.0) asserted exactly
@@ -239,6 +251,30 @@ Each leaves Python to auto-inject the real builtins module. They survived becaus
 **Decision:** Bulk generation inserts into `events_raw` and calls the production `project_tenant`. Separately, a small sample is HMAC-signed and POSTed through `/v1/webhooks/razorpay/{tenant}` and asserted to yield identical projected state.
 **Options:** direct + webhook fidelity test; direct only; full webhook path for every event.
 **Rationale:** The build list requires "the same projector — one code path, no drift", and the projector is shared either way. The fidelity test turns "no drift" from an assumption into an assertion, catching a divergence between the simulator's event construction and the webhook envelope parsing (e.g. how `cycle_ref` or `occurred_at` is derived). Full-webhook for all events would very likely miss the 60-second budget: ~30,000 in-process HTTP round-trips is a minute before any generation work.
+
+### ADR-032 · 2026-08-26 · Band definitions
+**Decision:** `hour_band` cut at the §1 NPCI execution windows — 5 bands: `<10:00`, `10:00–13:00`, `13:00–17:00`, `17:00–21:30`, `>=21:30`. `ticket_band` cut at the regulatory ceilings: `<₹1,000`, `₹1k–5k`, `₹5k–15k` (AFA cap), `₹15k–₹1,00,000`, `>=₹1,00,000`.
+**Options:** NPCI-aligned 5 bands; hourly 24 bands; three-hour 8 bands.
+**Rationale:** §36 keys `segment_priors` on both and defines neither. NPCI alignment spends resolution only where the system can act — hazard detail inside a peak window is unusable because the gate would DENY the attempt anyway. It also keeps cells dense enough to clear §27's `n_obs >= 50` floor: ~775 cells per mcc-rail versus ~3,720 for hourly, which would need ~186,000 observations and leave most cells falling back to the global prior. Three-hour bins were rejected because they straddle NPCI boundaries, blending times the system can use with times it cannot.
+**Ticket edges carry citations** already (ADR-021's AFA ceilings), satisfying Invariant 10 without inventing thresholds.
+
+### ADR-033 · 2026-08-26 · Per-customer observed hazard
+**Decision:** Derived on demand from `cycles` joined to `mandates`, filtered `due_at <= as_of`. No materialised counter.
+**Options:** derive point-in-time; new `customer_hazard` counts table; `customer_profiles.payday_posterior` JSONB.
+**Rationale:** §37 calls point-in-time correctness non-negotiable, and deriving from immutable history gives it by construction. A running aggregate has no as-of semantics — replaying a three-month-old decision would read today's counts, which is precisely the training-serving skew §37 exists to kill. Cheap at this scale (tens of cycles per customer). Materialisation belongs to Phase 12, where §25/§26 actually specify the memory subsystem.
+
+### ADR-034 · 2026-08-26 · Calibration numerics
+**Decision:** numpy only. Log-loss, equal-width ECE binning and reliability curves implemented in-repo and validated against hand-computed closed-form values.
+**Options:** numpy only; scikit-learn; scipy only.
+**Rationale:** ~40 lines, and project standards forbid adding a dependency to avoid writing twenty. Keeping the definitions in-repo makes them auditable — equal-width versus equal-frequency binning changes ECE materially, and §21 says a miscalibrated model "computes the wrong money". §40.2 already sets this pattern by requiring the Wilson bound and CUSUM be checked against reference implementations rather than imported. sklearn would also not pay forward: Phase 11's GBM will likely want LightGBM or XGBoost.
+
+### ADR-035 · 2026-08-26 · OPEN — simulator's code-05 composition
+**Status:** recorded, not yet resolved. Surfaced by a Phase 4 test whose premise turned out to be false.
+**Finding:** §20 characterises code 05 as "30-40% of all declines... roughly half being insufficient funds in disguise". The simulator produces an 05 population that is **~98% `no_funds`**, because `issuer_degraded` deterministically emits 91 and `limit_breach` emits 61 — neither ever masquerades as 05. §38 defines `mask_05_rate` solely as `P(05 | no_funds)`, so the simulator is faithful to §38 while not reproducing §20's account of the real signal.
+**Measured consequence:** overall V0 cause accuracy is identical at `mask_05_rate` 0.0 and 1.0 (0.911 both), because masking moves `no_funds` from 51 to 05 and V0's default answer for 05 is already `no_funds`. Masking, as modelled, creates no difficulty at all.
+**Why it matters:** Phase 11's EM model would be scored against a flattering V0 baseline. The 05 population is where §20 says the work is, and here it is nearly pure.
+**Options when addressed:** extend masking to `issuer_degraded` and `limit_breach` (a deviation beyond §38's stated parameter, so Class A); or accept the gap and score Phase 11 only on the sub-population where causes genuinely compete.
+**Pinned by:** `test_masking_does_not_change_overall_accuracy_here`, which fails if the composition changes — so this cannot be silently fixed or silently worsened.
 
 ## Spec errata found (documentation only, no code impact)
 - §18 cites "§34.4" for isolation-as-correctness; §34 is *Estimators* and has no subsections. Correct target is **§40.4**.
