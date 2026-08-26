@@ -20,6 +20,7 @@ re-opens a documented sandbox escape.
 from __future__ import annotations
 
 import ast
+import math
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any, Final
@@ -66,7 +67,10 @@ def _hours_since(moment: datetime | None) -> float:
     caller has to interpret.
     """
     if moment is None:
-        return float("-inf")
+        # `-math.inf` rather than `float("-inf")`: the string form yields an
+        # unkillable equivalent mutant under mutation testing, since "-INF"
+        # parses to the identical value (ADR-023).
+        return -math.inf
     if moment.tzinfo is None:
         raise PredicateError("naive datetime in predicate context")
     return (datetime.now(tz=UTC) - moment).total_seconds() / 3600.0

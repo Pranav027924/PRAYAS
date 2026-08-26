@@ -86,6 +86,43 @@ def test_syntax_errors_deny_rather_than_crash() -> None:
         safe_eval("1 +", {})
 
 
+# ── diagnostics: a denial nobody can interpret is a denial nobody can fix ────
+
+
+def test_a_rejected_node_is_named_in_the_error() -> None:
+    """The message must identify the offending construct, not just fail."""
+    with pytest.raises(PredicateError) as exc:
+        safe_eval("[i for i in x]", {"x": [1]})
+    assert "ListComp" in str(exc.value)
+
+    with pytest.raises(PredicateError) as exc:
+        safe_eval("x.attr", {"x": 1})
+    assert "Attribute" in str(exc.value)
+
+
+def test_a_disallowed_call_says_so() -> None:
+    with pytest.raises(PredicateError) as exc:
+        safe_eval("eval('1')", {})
+    assert str(exc.value) == "disallowed call"
+
+
+def test_a_naive_datetime_is_named_in_the_error() -> None:
+    with pytest.raises(PredicateError) as exc:
+        safe_eval("hours_since(t) >= 1", {"t": datetime(2026, 1, 1)})  # noqa: DTZ001
+    assert str(exc.value) == "naive datetime in predicate context"
+
+
+def test_a_non_boolean_result_reports_the_actual_type() -> None:
+    """ "expected bool" alone would not tell an author what their rule returned."""
+    with pytest.raises(PredicateError) as exc:
+        safe_eval("1 + 1", {})
+    assert "int" in str(exc.value)
+
+    with pytest.raises(PredicateError) as exc:
+        safe_eval("a", {"a": "text"})
+    assert "str" in str(exc.value)
+
+
 def test_statements_are_rejected() -> None:
     """`mode="eval"` accepts only expressions, so assignment cannot smuggle state."""
     with pytest.raises(PredicateError):
@@ -143,6 +180,48 @@ def test_non_boolean_result_is_rejected() -> None:
 def test_builtins_are_not_reachable() -> None:
     with pytest.raises(PredicateError):
         safe_eval("len(x)", {"x": [1, 2]})
+
+
+def test_the_builtins_namespace_is_genuinely_empty() -> None:
+    """Isolates the empty-builtins control from the AST whitelist.
+
+    `len(x)` is rejected by the *whitelist* (a call to a non-permitted name), so
+    it passes whether or not builtins are actually empty — the first control
+    masks the second. Mutation testing found four ways to defeat the builtins
+    guard that every other test still passed:
+
+        eval(code, None, bindings)          globals=None -> caller's globals
+        eval(code, bindings)                bindings as globals -> auto-injected
+        {"XX__builtins__XX": {}}            wrong key -> auto-injected
+        {"__BUILTINS__": {}}                wrong key -> auto-injected
+
+    A bare `Name` lookup passes the whitelist, so it reaches the namespace and
+    can see what is really there. `not {}` is True; `not <module builtins>` is
+    False.
+    """
+    assert safe_eval("not __builtins__", {}) is True
+
+
+def test_a_failing_rule_is_attributable_to_the_rule_source() -> None:
+    """The compiled pseudo-filename must identify the frame as a rule.
+
+    Without it a stack trace from a bad predicate points at an anonymous string
+    and an operator cannot tell rule evaluation from engine code. Mutation
+    testing surfaced this: changing the filename broke nothing that was tested.
+    """
+    with pytest.raises(PredicateError) as exc:
+        safe_eval("undefined_feature > 1", {})
+
+    cause = exc.value.__cause__
+    assert cause is not None
+
+    frames = []
+    tb = cause.__traceback__
+    while tb is not None:
+        frames.append(tb.tb_frame.f_code.co_filename)
+        tb = tb.tb_next
+
+    assert "<rule>" in frames, f"rule frame not identifiable; saw {frames}"
 
 
 def test_context_cannot_smuggle_a_callable() -> None:

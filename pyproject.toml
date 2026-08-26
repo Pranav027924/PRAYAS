@@ -115,5 +115,8 @@ exclude_lines = [
 # predicates: no surviving mutants". Pointing it at the whole codebase would
 # push runtime well past any usable budget.
 [tool.mutmut]
-paths_to_mutate = ["prayas/gate/"]
-tests_dir = ["tests/unit/"]
+# The whole package is copied so `mutants/` stays importable — the root
+# conftest imports prayas.db, and copying only gate/ breaks collection.
+# Scope is applied at run time instead: `mutmut run "prayas.gate.*"`.
+source_paths = ["prayas/"]
+pytest_add_cli_args_test_selection = ["tests/unit/"]

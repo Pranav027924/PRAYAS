@@ -19,12 +19,9 @@ from prayas.db.tenancy import system_transaction
 from prayas.gate.engine import (
     ALLOW,
     DENY,
-    RuleRecord,
     RuleStoreUnavailableError,
     evaluate,
-    evaluate_rules,
     load_active_rules,
-    make_afa_free_cap,
 )
 from tests.conftest import requires_db
 
@@ -212,60 +209,6 @@ async def test_as_of_selects_the_versions_in_force_then(app_engine: AsyncEngine)
     assert len(recent) > len(historic), "as_of did not restrict the rule set"
 
 
-# ── pure evaluation logic (also the mutation-testing target) ────────────────
-
-
-def _rule(rule_id: str, predicate: str, on_fail: str) -> RuleRecord:
-    return RuleRecord(
-        rule_id=rule_id,
-        version=1,
-        regulator="TEST",
-        citation="test",
-        as_of=TODAY,
-        predicate=predicate,
-        on_fail=on_fail,
-    )
-
-
-@pytest.mark.parametrize(
-    ("on_fails", "expected"),
-    [
-        (["DEFER"], "DEFER"),
-        (["DEFER", "ESCALATE_HUMAN"], "ESCALATE_HUMAN"),
-        (["DEFER", "ESCALATE_HUMAN", "DENY"], "DENY"),
-        (["ESCALATE_HUMAN", "DEFER"], "ESCALATE_HUMAN"),
-        (["DENY", "DEFER"], "DENY"),
-    ],
-)
-def test_verdict_precedence(on_fails: list[str], expected: str) -> None:
-    """DENY > ESCALATE_HUMAN > DEFER > ALLOW, regardless of rule order."""
-    rules = [_rule(f"R{i}", "False", of) for i, of in enumerate(on_fails)]
-    assert evaluate_rules(rules, {}).verdict == expected
-
-
-def test_a_predicate_error_denies_and_is_recorded() -> None:
-    """Fail closed, and leave evidence that the rule was attempted."""
-    rules = [_rule("BROKEN", "missing_feature > 1", "DENY")]
-    result = evaluate_rules(rules, {})
-
-    assert result.verdict == DENY
-    assert result.checks[0]["rule_id"] == "BROKEN"
-    assert result.checks[0]["verdict"] == DENY
-
-
-def test_an_unrecognised_on_fail_denies() -> None:
-    """Invariant 2 covers unknown rule versions; the gate must not trust the CHECK."""
-    rules = [_rule("WEIRD", "False", "PROBABLY_FINE")]
-    assert evaluate_rules(rules, {}).verdict == DENY
-
-
-def test_no_rules_evaluates_to_allow_at_the_pure_layer() -> None:
-    """`evaluate_rules` is pure; the fail-closed empty-set policy lives in `evaluate`."""
-    assert evaluate_rules([], {}).verdict == ALLOW
-
-
-def test_afa_cap_falls_back_to_default_never_to_unlimited() -> None:
-    cap = make_afa_free_cap({"*": 1_500_000, "6300": 10_000_000})
-    assert cap("6300") == 10_000_000
-    assert cap("9999") == 1_500_000
-    assert cap(None) == 1_500_000
+# Pure evaluation logic (verdict precedence, fail-closed paths, AFA ceilings)
+# lives in tests/unit/test_gate_logic.py so mutmut, which is scoped to
+# tests/unit/, can actually exercise it (ADR-023).

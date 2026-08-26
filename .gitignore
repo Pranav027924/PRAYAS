@@ -28,3 +28,7 @@ coverage.xml
 
 # OS
 .DS_Store
+
+# mutmut working copy (ADR-023)
+mutants/
+.mutmut-cache

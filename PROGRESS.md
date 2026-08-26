@@ -1,15 +1,15 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 2 — Trust layer
+Phase 3 — Simulator
 
 ## Phase status
 | # | Phase | Status | Closed on |
 |---|---|---|---|
 | 0 | Foundations | CLOSED | 2026-08-25 |
 | 1 | Event spine | CLOSED | 2026-08-25 |
-| 2 | Trust layer | IN PROGRESS | — |
-| 3 | Simulator | not started | — |
+| 2 | Trust layer | CLOSED | 2026-08-26 |
+| 3 | Simulator | IN PROGRESS | — |
 | 4 | V0 intelligence | not started | — |
 | 5 | Sequencer | not started | — |
 | 6 | Executor | not started | — |
@@ -17,14 +17,22 @@ Phase 2 — Trust layer
 | 8 | FIRST DEFENSIBLE NUMBER | not started | — |
 | 9–19 | see Execution Playbook | not started | — |
 
-## Exit criteria — current phase (Phase 2 — Trust layer)
-- [ ] Tampering with any ledger field is detected by the verifier
-- [ ] Every rule has a unit test covering both sides of its boundary
-- [ ] `safe_eval` rejects `__import__`, attribute access, comprehensions, lambdas
-- [ ] Gate returns DENY when the rule store is unreachable
-- [ ] Mutation testing on gate predicates: no surviving mutants
+## Exit criteria — current phase (Phase 3 — Simulator)
+- [ ] Generated distributions match configured parameters within tolerance
+- [ ] Same seed produces byte-identical output
+- [ ] Simulated events project to valid state through the production projector
+- [ ] 10,000 cycles generate in under 60 seconds
 
 ## Closed phases
+
+### Phase 2 — Trust layer · closed 2026-08-26 · tag `phase-2-complete`
+- [x] Tampering with **any** ledger field detected — parametrised across all **25** hashed columns individually, plus `record_hash` itself, record deletion (sequence gap), and single-break localisation
+- [x] Every rule has a both-sides boundary test — all 8 rules at §40.2's cliffs, plus a metatest that fails if a rule ships untested, and assertions that every rule carries citation/`as_of`/`regulator` (Invariant 10)
+- [x] `safe_eval` rejects the named forms — `__import__`, attribute access, comprehensions, lambdas, plus ~30 further idioms including `().__class__.__bases__[0].__subclasses__()`
+- [x] Gate DENYs when the rule store is unreachable — with `degraded=True`; also denies on unknown action type and unrecognised `on_fail`
+- [x] **Mutation testing: 62 mutants on `prayas/gate/predicate.py`, 62 killed, zero survivors** (measured from the run output; see ADR-027 on why `mutmut results` is not the source of truth)
+- Artifact (§8): shadow-mode harness reports the baseline day-1/3/5 policy producing **30,000 attempts outside NPCI windows and 30,000 without valid 24h notice, per 10,000 cycles** — every baseline attempt unlawful
+- Gates: 369 tests, coverage 86.84% (floor 85), mypy --strict clean, ruff clean
 
 ### Phase 1 — Event spine · closed 2026-08-25 · tag `phase-1-complete`
 - [x] Same event 100× → exactly one transition — 100 deliveries produced 1 `events_raw` row and `attempts_used == 1`; asserts projected state, not just row count
@@ -196,6 +204,20 @@ _Any approved divergence, with the reason and the approving message._
 
 ### ADR-026 · 2026-08-25 · Carried without a separate ask
 `PyYAML` promoted to a declared runtime dependency. ADR-020 chose YAML as the rule-pack format and migrations must parse it, so this is a mechanical consequence rather than a choice — same reasoning as `uvicorn` (ADR-011) and `httpx` (ADR-019). It was previously present only transitively, which is not something to rely on.
+
+### ADR-027 · 2026-08-26 · Making mutation testing actually run
+**Problem:** `mutmut run` aborted with `BadTestExecutionCommandsException`. The real cause took three wrong hypotheses to find — the visible error was only "pytest exit code 4".
+**Root cause:** mutmut copies `source_paths` into a `mutants/` directory and runs pytest there. With `source_paths = ["prayas/gate/"]`, `mutants/prayas/` contained only `gate/`, so the root conftest's `import prayas.db` raised `ModuleNotFoundError`, pytest exited 4 (usage error), and mutmut aborted.
+**Resolution:** copy the whole package (`source_paths = ["prayas/"]`) so `mutants/` stays importable, and scope at run time instead: `mutmut run "prayas.gate.predicate.*"`.
+**Second finding, more important:** `evaluate_rules` and `make_afa_free_cap` reported **"no tests"** — every mutant survived unexamined — because their pure-logic tests sat in `tests/integration/` while mutmut is scoped to `tests/unit/`. Moved to `tests/unit/test_gate_logic.py`. A pure function whose tests live in the wrong tier is worse than untested, because it looks covered.
+**Also noted:** `mutmut results` reads a different store than `mutmut run` and reported all mutants "not checked" after a successful run. Outcomes are measured from the run's own output, not from `results`.
+
+### ADR-028 · 2026-08-26 · Four sandbox escapes found by mutation testing
+Mutation testing found four ways to defeat the empty-builtins control that **every existing test still passed**:
+`eval(code, None, bindings)` · `eval(code, bindings)` · `{"XX__builtins__XX": {}}` · `{"__BUILTINS__": {}}`
+Each leaves Python to auto-inject the real builtins module. They survived because `test_builtins_are_not_reachable` used `len(x)`, which the **AST whitelist** rejects before builtins are ever consulted — the first control masked the second entirely.
+**Fix:** `test_the_builtins_namespace_is_genuinely_empty` asserts `safe_eval("not __builtins__", {}) is True`. A bare `Name` passes the whitelist and reaches the namespace, so it can see what is actually there: `not {}` is True, `not <module builtins>` is False.
+**Lesson worth keeping:** layered controls hide each other from tests. Each layer needs a test that isolates it.
 
 ## Spec errata found (documentation only, no code impact)
 - §18 cites "§34.4" for isolation-as-correctness; §34 is *Estimators* and has no subsections. Correct target is **§40.4**.

@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "0 18 * * *"  # nightly, for the slow tiers (§40.1)
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -73,6 +75,34 @@ jobs:
         run: |
           uv export --no-emit-project --format requirements-txt > /tmp/requirements.txt
           uv run pip-audit --strict -r /tmp/requirements.txt
+
+  # Phase 2 exit criterion: "mutation testing on gate predicates: no surviving
+  # mutants" (§40.10, ADR-023). Nightly rather than per-commit — §40.1 puts slow
+  # tiers on that cadence, and mutation testing is the slowest of them.
+  #
+  # Outcomes are parsed from the run's own output: `mutmut results` reads a
+  # different store and reports "not checked" after a successful run (ADR-027).
+  mutation:
+    if: github.event_name == 'schedule' || contains(github.event.head_commit.message, '[mutation]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --all-extras --dev
+
+      - name: Mutation testing on the predicate sandbox
+        run: |
+          set -euo pipefail
+          uv run mutmut run "prayas.gate.predicate.*" 2>&1 | tr '\r' '\n' \
+            | grep -oE "^(🎉|🙁|🤔|⏰|🔇) prayas\.gate\.predicate\.\S+" > /tmp/mutants.txt
+          total=$(wc -l < /tmp/mutants.txt)
+          survived=$(grep -c "^🙁" /tmp/mutants.txt || true)
+          echo "mutants run: $total, survived: $survived"
+          test "$total" -gt 0 || { echo "no mutants ran — the run is not evidence"; exit 1; }
+          test "$survived" -eq 0 || { grep "^🙁" /tmp/mutants.txt; exit 1; }
 
   # Exit criterion: `docker compose up` produces a working stack from a clean clone.
   # Deliberately a separate job on a fresh checkout — "works in the test job" is
