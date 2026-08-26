@@ -11,13 +11,16 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from prayas.db.schema import TENANT_SCOPED_TABLES
+from prayas.db.schema import APP_READABLE_TENANT_TABLES
 from prayas.db.tenancy import system_transaction, tenant_transaction
 from tests.conftest import requires_db
 
 pytestmark = [pytest.mark.db, requires_db]
 
-TABLES = sorted(TENANT_SCOPED_TABLES)
+# sim_ground_truth is excluded: the app role has no privilege on it by
+# design (ADR-030), so a row-visibility assertion would hit a permission
+# error rather than test RLS. Its policing is asserted in the metatests.
+TABLES = sorted(APP_READABLE_TENANT_TABLES)
 
 
 @pytest.mark.parametrize("table", TABLES)

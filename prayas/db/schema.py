@@ -37,8 +37,20 @@ TENANT_SCOPED_TABLES: Final[frozenset[str]] = frozenset(
         "experiment_config",
         # ADR-014. Holds secret *references*, never secret material.
         "webhook_secrets",
+        # ADR-030. Simulator labels. Tenant-scoped and policed, but the app role
+        # holds no privilege on it at all — see NOT_APP_READABLE below.
+        "sim_ground_truth",
     }
 )
+
+#: Tenant-scoped tables the application role deliberately cannot read.
+#: `sim_ground_truth` carries §38 labels, and §38 states "models see only the
+#: observables" — withholding the grant makes that structural (ADR-030).
+NOT_APP_READABLE: Final[frozenset[str]] = frozenset({"sim_ground_truth"})
+
+#: Tenant-scoped tables the app role can actually query. The row-visibility
+#: isolation tests run as the app role, so they parametrise over this.
+APP_READABLE_TENANT_TABLES: Final[frozenset[str]] = TENANT_SCOPED_TABLES - NOT_APP_READABLE
 
 #: Cross-tenant by design. Each entry is a decision, not an omission.
 GLOBAL_TABLES: Final[frozenset[str]] = frozenset(

@@ -1,7 +1,7 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 3 — Simulator
+Phase 4 — V0 intelligence
 
 ## Phase status
 | # | Phase | Status | Closed on |
@@ -9,21 +9,27 @@ Phase 3 — Simulator
 | 0 | Foundations | CLOSED | 2026-08-25 |
 | 1 | Event spine | CLOSED | 2026-08-25 |
 | 2 | Trust layer | CLOSED | 2026-08-26 |
-| 3 | Simulator | IN PROGRESS | — |
-| 4 | V0 intelligence | not started | — |
+| 3 | Simulator | CLOSED | 2026-08-26 |
+| 4 | V0 intelligence | IN PROGRESS | — |
 | 5 | Sequencer | not started | — |
 | 6 | Executor | not started | — |
 | 7 | Measurement plane | not started | — |
 | 8 | FIRST DEFENSIBLE NUMBER | not started | — |
 | 9–19 | see Execution Playbook | not started | — |
 
-## Exit criteria — current phase (Phase 3 — Simulator)
-- [ ] Generated distributions match configured parameters within tolerance
-- [ ] Same seed produces byte-identical output
-- [ ] Simulated events project to valid state through the production projector
-- [ ] 10,000 cycles generate in under 60 seconds
+## Exit criteria — current phase (Phase 4 — V0 intelligence)
+_To be read from the Execution Playbook at phase start._
 
 ## Closed phases
+
+### Phase 3 — Simulator · closed 2026-08-26 · tag `phase-3-complete`
+- [x] Distributions match configured parameters — payday mix, rail mix and `mask_05_rate` each within ±0.03 over 4,000 cycles, plus both boundary extremes (0.0 and 1.0) asserted exactly
+- [x] Same seed → byte-identical output — verified in-process, **and across a process boundary** (a subprocess pair), since in-process repetition can hide dependence on global RNG state. Also asserts a 50-cycle run is a byte-exact prefix of a 500-cycle run, which spawned per-cycle streams guarantee
+- [x] Simulated events project to valid state — through the real `project_tenant`; every projected cycle and mandate state is a member of the §11 state machines, `attempts_used ≤ attempt_budget` holds, and zero events left unconsumed
+- [x] 10,000 cycles under 60s — **0.55s, 0.9% of budget**
+- Leakage control (ADR-030): app role verified to hold *no* SELECT/INSERT/UPDATE/DELETE on `sim_ground_truth`, asserted both structurally and behaviourally
+- No-drift (ADR-031): the same events HMAC-signed through `/v1/webhooks/razorpay/{tenant}` project to state **identical** to direct insertion
+- Gates: 409 tests, coverage 89.31% (floor 85), mypy --strict clean, ruff clean
 
 ### Phase 2 — Trust layer · closed 2026-08-26 · tag `phase-2-complete`
 - [x] Tampering with **any** ledger field detected — parametrised across all **25** hashed columns individually, plus `record_hash` itself, record deletion (sequence gap), and single-break localisation
@@ -218,6 +224,21 @@ Mutation testing found four ways to defeat the empty-builtins control that **eve
 Each leaves Python to auto-inject the real builtins module. They survived because `test_builtins_are_not_reachable` used `len(x)`, which the **AST whitelist** rejects before builtins are ever consulted — the first control masked the second entirely.
 **Fix:** `test_the_builtins_namespace_is_genuinely_empty` asserts `safe_eval("not __builtins__", {}) is True`. A bare `Name` passes the whitelist and reaches the namespace, so it can see what is actually there: `not {}` is True, `not <module builtins>` is False.
 **Lesson worth keeping:** layered controls hide each other from tests. Each layer needs a test that isolates it.
+
+### ADR-029 · 2026-08-26 · Simulator RNG and determinism
+**Decision:** `numpy.random.default_rng(seed)`, Generator threaded explicitly through every call, with `SeedSequence.spawn()` for independent per-entity streams. numpy added as a runtime dependency.
+**Options:** numpy Generator threaded; stdlib `random.Random` instances; numpy with module-level global seeding.
+**Rationale:** The exit criterion is "same seed produces byte-identical output". numpy explicitly guarantees stream reproducibility for a given bit generator; CPython guarantees the Mersenne Twister core but *not* that distribution algorithms stay fixed across versions, so a Python upgrade could break byte-identity for a reason unrelated to the simulator. Spawned streams mean adding a customer never shifts another's draws. Global seeding was rejected outright: test ordering would change output.
+
+### ADR-030 · 2026-08-26 · Ground-truth storage
+**Decision:** `sim_ground_truth` table keyed by cycle, RLS-enabled, **SELECT granted to the owner/evaluation role only — never to `prayas_app`**.
+**Options:** separate table with no app grant; separate table with normal grants; file artifact outside the database.
+**Rationale:** §38 states "models see only the observables". Withholding the grant makes leakage structurally impossible rather than a matter of discipline — a feature query cannot join labels it has no privilege to read, the same move ADR-004 used to make tenant isolation real. Keeps the labels joinable in SQL for §20's confusion matrix. Training-serving leakage is how a model posts excellent offline numbers and fails in production; §43 already pages on "online/offline feature parity".
+
+### ADR-031 · 2026-08-26 · Simulator ingest path
+**Decision:** Bulk generation inserts into `events_raw` and calls the production `project_tenant`. Separately, a small sample is HMAC-signed and POSTed through `/v1/webhooks/razorpay/{tenant}` and asserted to yield identical projected state.
+**Options:** direct + webhook fidelity test; direct only; full webhook path for every event.
+**Rationale:** The build list requires "the same projector — one code path, no drift", and the projector is shared either way. The fidelity test turns "no drift" from an assumption into an assertion, catching a divergence between the simulator's event construction and the webhook envelope parsing (e.g. how `cycle_ref` or `occurred_at` is derived). Full-webhook for all events would very likely miss the 60-second budget: ~30,000 in-process HTTP round-trips is a minute before any generation work.
 
 ## Spec errata found (documentation only, no code impact)
 - §18 cites "§34.4" for isolation-as-correctness; §34 is *Estimators* and has no subsections. Correct target is **§40.4**.

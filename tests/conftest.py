@@ -153,7 +153,7 @@ async def _seed_tenant(conn: AsyncConnection, tenant: str) -> None:
 async def _truncate_all(conn: AsyncConnection) -> None:
     await conn.execute(
         text(
-            "TRUNCATE webhook_secrets, experiment_config, outbox, scheduled_actions,"
+            "TRUNCATE sim_ground_truth, webhook_secrets, experiment_config, outbox, scheduled_actions,"
             " decisions, customer_profiles, interventions, attempts, cycles, mandates,"
             " events_raw, tenants RESTART IDENTITY CASCADE"
         )
