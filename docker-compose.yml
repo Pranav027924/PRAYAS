@@ -75,5 +75,20 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  # The executor is its own service (ADR-042): it scales on pending-timer depth
+  # per §15, and it must be killable independently of the API — two Phase 6
+  # exit criteria turn on surviving a real process death.
+  executor:
+    build: .
+    command: ["python", "-m", "prayas.executor.worker"]
+    environment:
+      PRAYAS_ENV: ${PRAYAS_ENV:-local}
+      PRAYAS_LOG_LEVEL: ${PRAYAS_LOG_LEVEL:-INFO}
+      PRAYAS_DATABASE_URL_APP: postgresql+asyncpg://${POSTGRES_APP_USER:-prayas_app}:${POSTGRES_APP_PASSWORD:-prayas_local_dev_only}@postgres:5432/${POSTGRES_DB:-prayas}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
 volumes:
   pgdata:

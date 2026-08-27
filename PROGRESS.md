@@ -1,7 +1,7 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 5 — Sequencer
+Phase 6 — Executor
 
 ## Phase status
 | # | Phase | Status | Closed on |
@@ -11,15 +11,27 @@ Phase 5 — Sequencer
 | 2 | Trust layer | CLOSED | 2026-08-26 |
 | 3 | Simulator | CLOSED | 2026-08-26 |
 | 4 | V0 intelligence | CLOSED | 2026-08-26 |
-| 5 | Sequencer | IN PROGRESS | — |
-| 6 | Executor | not started | — |
+| 5 | Sequencer | CLOSED | 2026-08-27 |
+| 6 | Executor | IN PROGRESS | — |
 | 7 | Measurement plane | not started | — |
 | 8 | FIRST DEFENSIBLE NUMBER | not started | — |
 | 9–19 | see Execution Playbook | not started | — |
 
-## Exit criteria — current phase (Phase 5 — Sequencer)
-_Evidence below is from a run on 2026-08-27. Phase remains open pending confirmation._
+## Exit criteria — current phase (Phase 6 — Executor)
+_Evidence from a run on 2026-08-27. Phase remains open pending confirmation._
 
+- [x] **Kill worker mid-transaction: no orphaned debits, no lost timers** — a real subprocess `SIGKILL`'d after the budget decrement, before COMMIT. `attempts_used` back to 0, zero attempt rows, zero outbox rows, timer immediately re-claimable. A patched exception would have exercised Python's `finally`; only a real kill exercises Postgres's rollback
+- [x] **Kill after outbox insert, before provider call: relay resumes with same key** — `SIGKILL` in exactly that window; exactly one durable intent, still `pending`, attempt and outbox agreeing on the key. The relay then submitted **that same key**, one debit
+- [x] **10% injected provider timeouts: zero double debits, all reconciled** — 40 cycles; ambiguous rows held their budget slots (`sum(attempts_used) == 40`, zero over budget), then all reconciled. Every key submitted exactly **once** — reconciliation *queries* by key rather than re-submitting
+- [x] **Budget decrement atomic under concurrent workers** — 10 workers race one cycle with budget 4: exactly 4 fired, `attempts_used == 4`, 4 attempt rows. §31's other three defences each asserted in isolation too, so the suite is not resting on one
+- [x] **The adversarial test passes** — 100 independent `failed → captured` races against a firing retry, head start alternated so both orderings are genuinely exercised. **Split 50/50, zero double debits.** Every cycle: ≤1 attempt, ≤1 budget consumed, attempt count equal to `attempts_used`
+- Stack: `docker compose up --wait` brings postgres, migrate, api, chain-verifier **and the new `executor` service** to healthy; `/health` → 200
+- Migration `0009_tenant_registry_fn` reverses and re-applies cleanly
+- Gates: 621 tests, coverage 88.91% (floor 85), mypy --strict clean (49 files), ruff + ruff format clean
+
+## Closed phases
+
+### Phase 5 — Sequencer · closed 2026-08-27
 - [x] **DP matches brute-force enumeration for `B ≤ 3`, `H ≤ 40`** — 27 parametrised cases (B∈{1,2,3} × H∈{10,25,40} × 3 seeds), every state compared, plus 6 cases asserting the DP's *chosen slot* realises the value the objective predicts. The enumerator is transcribed from §23.1's equation, not from the DP module
 - [x] **Value monotone non-decreasing in `B`, `A`, `W`** — B and A hold on `V` directly (Hypothesis, 60/40 examples). **W does not hold on `V`** — see ADR-040; asserted on `V + W`, which holds unconditionally, with the raw non-monotonicity pinned by its own regression test
 - [x] **Solve under 15 ms at `B=4`, `H=720`** — **3.34 ms, 22% of budget**, 459 legal slots. The literal §23.2 loop measures **20.68 ms and misses the criterion**; see ADR-041
@@ -28,7 +40,7 @@ _Evidence below is from a run on 2026-08-27. Phase remains open pending confirma
 - Artifact: given a failed cycle, prints every candidate with its EV — chooses **slot 74 (05 Mar 15:30 IST, 33.3% funding)** over the first legal slot, i.e. the payday rather than the calendar, and names the runner-up and the margin
 - Gates: 599 tests, coverage 89.57% (floor 85), mypy --strict clean (42 files), ruff + ruff format clean
 
-## Closed phases
+**Carried into Phase 10 (ADR-040):** §23.2's STOP baseline of `0` contradicts §23.1's `A + W` success payout. Changing STOP to `W` is the economically correct fix but changes stopping behaviour, so it was deferred to when §22's revocation model makes `W` a real output.
 
 ### Phase 4 — V0 intelligence · closed 2026-08-26 · tag `phase-4-complete`
 - [x] V0 hazard beats a uniform prior by log-loss — measured on a held-out fold, with the margin pinned so a regression that stays merely "better" still fails
@@ -317,6 +329,36 @@ Each leaves Python to auto-inject the real builtins module. They survived becaus
 **Decision:** Ship a layer-vectorised `solve`; keep `solve_reference`, a literal §23.2 transcription, and assert the two agree exactly.
 **Options:** vectorise; ship the literal loop; loosen the 15 ms criterion.
 **Rationale:** Not premature optimisation — **measured, the literal §23.2 loop takes 20.68 ms at B=4, H=720, missing the 15 ms exit criterion outright.** §23.2's "~8 ms vectorised" estimate does not survive a per-`(b,t)` numpy call at this size, where per-call overhead dominates. The rearrangement `ev(t,t') = U[t'] − Z[t']·(1/S[t])` makes each layer one outer product: **3.34 ms, 22% of budget, a 6.2× speedup.** Keeping the reference implementation means the shipped code has something independent to be checked against and a reader can still compare against the spec directly.
+
+### ADR-042 · 2026-08-27 · Executor worker runtime
+**Decision:** A separate Compose service (`executor`) alongside `migrate` and `api`, running a database-backed poll loop.
+**Options:** separate service; thread inside the API process; separate service with APScheduler.
+**Rationale:** Matches §15's component catalogue, where `executor` is its own deployable scaling on pending-timer depth. Decisive for the exit criteria: two of them require killing the worker mid-transaction, and only a real `SIGKILL` against a real process exercises Postgres's rollback — the mechanism actually being relied on. A thread cannot be killed independently of the API. APScheduler was rejected as a dependency duplicating what `FOR UPDATE SKIP LOCKED` over `scheduled_actions` already specifies.
+**Consequence:** the worker drains **per tenant**, binding `app.tenant_id` for each, because RLS scopes every query to one tenant. This is not a workaround — §18 specifies "decision work is drained with weighted fair queuing keyed on tenant, so one merchant's month-start burst cannot starve another's".
+
+### ADR-043 · 2026-08-27 · Provider seam and Phase 6 stand-in
+**Decision:** A `RailProvider` protocol the executor codes against, plus an in-repo fake supporting deterministic success / 5xx / timeout / ambiguous outcomes by seed.
+**Options:** protocol + in-repo fake; local HTTP stub server; per-test mocks with no protocol.
+**Rationale:** Calling Razorpay is Class A on cost grounds and Phase 17 owns live integration, so Phase 6 needs a stand-in. A protocol gives Phase 17 a seam to drop the real adapter into and keeps provider specifics out of the executor. Making fault injection a first-class capability of the fake — rather than mocks stitched into each test — is what lets "10% injected timeouts, zero double debits" measure the executor rather than the mocks. An HTTP stub is more realistic but §40.7 places chaos testing in Phase 15.
+
+### ADR-044 · 2026-08-27 · Executor timings
+**Decision:** Lease 60s, poll interval 1s, claim batch 50.
+**Options:** 60s/1s/50; 300s/5s/200; 15s/500ms/20.
+**Rationale:** Appendix C specifies none of these. The lease must exceed the worst-case fire transaction, or two workers can hold one action — the atomic budget decrement and unique `idem_key` would still block a double debit, but that spends §31's defence-in-depth rather than keeping it. 60s is far above any plausible transaction time while returning a crashed worker's timers within a minute, well inside the sequencer's notice-lead margins. A 300s lease strands up to 200 timers per crash; a 15s lease risks stealing a live-but-slow worker's claim.
+
+### ADR-045 · 2026-08-27 · Deterministic jitter source
+**Decision:** Derive jitter from the idempotency key.
+**Options:** from `idem_key`; from `action_id`; random per fire.
+**Rationale:** §31's key is already a deterministic function of `(cycle_id, attempt_seq, action_type, amount_paise)`, so jitter becomes a pure function of the attempt's identity: a retry of the same logical attempt lands at the same instant instead of drifting, and §32's replay reconstructs the fire time from stored artifacts alone, which §40.9's replay-determinism requirement needs. `action_id` is not part of the decision record. Random jitter spreads load best but breaks replay outright.
+
+### ADR-046 · 2026-08-27 · Tenant enumeration for platform-level workers
+**Decision:** A `SECURITY DEFINER` function `prayas_tenant_ids()` returning **only** `tenant_id`, executable by `prayas_app`. Migration `0009_tenant_registry_fn`.
+**Options:** SECURITY DEFINER function returning only ids; policy letting the app role read all of `tenants`; a separate executor role bypassing RLS.
+**Rationale:** Phase 6 exposed a gap Phase 0 did not: §18 requires the executor drain per tenant, but `tenants` is under RLS (ADR-013) keyed on `app.tenant_id`, so a worker with no tenant bound sees zero rows and cannot discover which tenants to bind. The function is the narrowest opening — tenant *identifiers* are platform metadata, while `config` (policy weights, fatigue caps, kill switches) stays behind the policy, so a bug reading another tenant's config is still stopped by the database. Follows ADR-014a (`webhook_secrets`) and ADR-030 (`sim_ground_truth`) in carving out a specific owner-scoped read rather than weakening a table's policy. `search_path` is pinned inside the function, since a SECURITY DEFINER function with a caller-controlled search path is a privilege-escalation vector.
+
+### ADR-047 · 2026-08-27 · Claim and fire are separate transactions
+**Decision:** The worker claims in one transaction and fires each action in its own, rather than doing both in one.
+**Rationale:** Recorded because it looks like a granularity choice and is actually a **correctness** one. Claiming locks `scheduled_actions`; firing locks `cycles` then `scheduled_actions`. Combining them acquires the two tables actions-first, while the late-capture guard acquires them cycle-first — opposite orders, which deadlocks under exactly the race Phase 6's adversarial test covers (observed as `DeadlockDetectedError` before the split). Separating them makes every path lock the cycle first. It also keeps a crash's blast radius to one action and stops one tenant's failure rolling back another's committed work.
 
 ## Spec errata found (documentation only, no code impact)
 - §18 cites "§34.4" for isolation-as-correctness; §34 is *Estimators* and has no subsections. Correct target is **§40.4**.
