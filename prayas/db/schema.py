@@ -5,7 +5,7 @@ Governing spec: Master Spec §18 and §36.
 This exists so the isolation suite has something to assert *against*. The
 metatest in ``tests/isolation`` reads the live database and fails if any table
 carrying a ``tenant_id`` column is absent from ``TENANT_SCOPED_TABLES`` — which
-is what makes the rule in `the tenancy rules` ("any new tenant-scoped
+is what makes the rule in the tenancy rules ("any new tenant-scoped
 table must be added to the isolation test suite in the same commit that creates
 it") enforceable rather than aspirational.
 

@@ -1,7 +1,7 @@
 """Hazard mathematics (Master Spec §21; ADR-032, ADR-034).
 
 The conditional `p(t|t_last)` gets the most attention here because §21 says it is
-"the subtlety most implementations miss" and the modelling rules calls it
+"the subtlety most implementations miss" and the modelling rules call it
 "the most likely error in the whole project". Every value below is hand-computed
 from the definitions, not from the implementation.
 """

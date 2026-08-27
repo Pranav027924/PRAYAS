@@ -7,7 +7,7 @@ Three claims, each measured rather than asserted:
 3. **The conditional `p(t|t_last)` matches empirical ground truth.**
 
 The third is the one that matters. §21 calls the `t_last` conditioning "the
-subtlety most implementations miss" and the modelling rules calls getting
+subtlety most implementations miss" and the modelling rules call getting
 it wrong "the most likely error in the whole project". Phase 3 built ground truth
 precisely so this could be checked against reality instead of against itself.
 

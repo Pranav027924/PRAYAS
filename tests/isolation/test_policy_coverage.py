@@ -1,6 +1,6 @@
 """Metatests: the isolation suite cannot silently stop covering a table.
 
-the tenancy rules requires that any new tenant-scoped table be added to
+the tenancy rules require that any new tenant-scoped table be added to
 the isolation suite in the same commit that creates it. A rule stated in prose is
 a hope. These tests read the live database and fail if reality and the declared
 registry disagree, which turns that rule into machinery.

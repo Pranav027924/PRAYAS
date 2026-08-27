@@ -8,7 +8,7 @@ Every compliance rule is a cliff. A test that only probes the permitted side
 proves nothing — it would pass against a rule that always returns True.
 
 The metatest at the bottom is the enforcement: it fails if a rule ships without
-a boundary test, so the compliance-gate rules's "every new rule needs a
+a boundary test, so the compliance-gate rules' "every new rule needs a
 unit test covering BOTH sides of its boundary before it is activated" becomes
 machinery rather than a hope.
 """

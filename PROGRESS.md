@@ -18,7 +18,15 @@ Phase 5 — Sequencer
 | 9–19 | see Execution Playbook | not started | — |
 
 ## Exit criteria — current phase (Phase 5 — Sequencer)
-_To be read from the Execution Playbook at phase start._
+_Evidence below is from a run on 2026-08-27. Phase remains open pending confirmation._
+
+- [x] **DP matches brute-force enumeration for `B ≤ 3`, `H ≤ 40`** — 27 parametrised cases (B∈{1,2,3} × H∈{10,25,40} × 3 seeds), every state compared, plus 6 cases asserting the DP's *chosen slot* realises the value the objective predicts. The enumerator is transcribed from §23.1's equation, not from the DP module
+- [x] **Value monotone non-decreasing in `B`, `A`, `W`** — B and A hold on `V` directly (Hypothesis, 60/40 examples). **W does not hold on `V`** — see ADR-040; asserted on `V + W`, which holds unconditionally, with the raw non-monotonicity pinned by its own regression test
+- [x] **Solve under 15 ms at `B=4`, `H=720`** — **3.34 ms, 22% of budget**, 459 legal slots. The literal §23.2 loop measures **20.68 ms and misses the criterion**; see ADR-041
+- [x] **Stopping rationale carries actual rupee figures** — asserts the real continuation value (`₹5,988.00`) and best-EV figures appear, not a zeroed template
+- [x] **Legality mask verified against every rail constraint independently** — each of the four has its own function and its own tests, at §40.2's cliffs (09:59:59/10:00:00, 12:59:59/13:00:00, 16:59:59/17:00:00, 21:29:59/21:30:00, 23:49/23:50). Plus a test that each constraint excludes slots the others do not, so none can be a silent no-op
+- Artifact: given a failed cycle, prints every candidate with its EV — chooses **slot 74 (05 Mar 15:30 IST, 33.3% funding)** over the first legal slot, i.e. the payday rather than the calendar, and names the runner-up and the margin
+- Gates: 599 tests, coverage 89.57% (floor 85), mypy --strict clean (42 files), ruff + ruff format clean
 
 ## Closed phases
 
@@ -275,6 +283,40 @@ Each leaves Python to auto-inject the real builtins module. They survived becaus
 **Why it matters:** Phase 11's EM model would be scored against a flattering V0 baseline. The 05 population is where §20 says the work is, and here it is nearly pure.
 **Options when addressed:** extend masking to `issuer_degraded` and `limit_breach` (a deviation beyond §38's stated parameter, so Class A); or accept the gap and score Phase 11 only on the sub-population where causes genuinely compete.
 **Pinned by:** `test_masking_does_not_change_overall_accuracy_here`, which fails if the composition changes — so this cannot be silently fixed or silently worsened.
+
+### ADR-036 · 2026-08-27 · Mandate continuation value `W` placeholder
+**Decision:** `W = 12 × A` until §22's revocation model lands in Phase 10.
+**Options:** 12×A derived from Appendix C; W = 0; flat rupee constant from `tenants.config`.
+**Rationale:** Appendix C fixes `discount_factor: 0.98` and `ltv_horizon_cycles: 24`. Holding `A_k` constant with a modest per-cycle survival decay and ~0.9 collection rate, §23.1's `Σ δ^k · P(alive) · A · P(collect)` lands near 12×A — derived from published config rather than invented. `W = 0` was rejected because it collapses §23.1's thesis entirely: the failure branch loses its penalty and Phase 5 would ship the exact single-cycle formulation the section says was the wrong design. A flat constant was rejected because continuation value is intrinsically per-mandate.
+
+### ADR-037 · 2026-08-27 · Marginal revocation hazard `Δr` placeholder
+**Decision:** Constant `Δr = 0.04` per attempt, matching Phase 3's `SimConfig.revocation_beta`.
+**Options:** constant 0.04 matching the simulator; convex in attempts used; time-varying per §23.1's literal signature.
+**Rationale:** The simulator already generates ground truth with 0.04 hazard added per consecutive failure. Reusing that exact value keeps the DP's assumed revocation model identical to the one the labelled data actually exhibits — so Phase 8 measures the sequencer rather than a mismatch between two disagreeing models. Convex-in-attempts is likely more realistic but would optimise against a world the ground truth does not describe. Time-varying was rejected because no spec section supplies a shape for that curve, so the values would be invented onto the money path.
+
+### ADR-038 · 2026-08-27 · Cost model shape — deviation from §23.2
+**Decision:** Cost becomes **two-dimensional**, `cost[b][t]`: flat fee + `β_fraud · k²` (k = attempts already spent, scaled to amount at stake) + `λ_annoyance` per attempt. Coefficients from Appendix C (`beta_fraud: 0.4`, `lambda_annoyance: 1.0`).
+**Options:** extend to `cost[b][t]`; keep `cost[t]` flat; keep `cost[t]` convex in time-to-deadline.
+**Rationale:** The Phase 5 build list requires "fees, **convex fraud risk**, annoyance", but §23.2 types cost as `cost[t]` — one dimension over slots. Convexity in attempt count is not expressible in that shape, since attempts live in `b`. Fraud exposure comes from repetition against a single mandate, so convexity belongs in `b`, not `t`. Preserves the DP's `O(B·H²)` complexity exactly — the array gains a dimension the loop already iterates. Keeping `cost[t]` flat would price the fourth attempt identically to the first, removing a real reason to stop early and leaving `Δr·W` as the sole brake.
+**Deviation:** §23.2's `cost[t]` signature → `cost[b][t]`.
+
+### ADR-039 · 2026-08-27 · Issuer health multiplier placeholder
+**Decision:** `health[t] = 1.0` everywhere, behind a marked seam. No read of `issuer_health`.
+**Options:** constant 1.0; read `issuer_health` with 1.0 fallback; crude proxy from recent attempts.
+**Rationale:** §21's nowcast is Phase 11 and `issuer_health` is unpopulated. A neutral multiplier leaves the hazard exactly as the Phase 4 model estimated it, so Phase 8's number is attributable to something that exists. Wiring a read path against an empty table would ship code exercised by nothing for six phases — the scaffolding-ahead pattern the build rules forbid. A naive success-rate proxy was rejected because §21 specifies a Wilson lower bound and CUSUM precisely because the naive version misfires on sparse data, and a wrong multiplier corrupts every EV the sequencer computes.
+
+### ADR-040 · 2026-08-27 · W-monotonicity — §23.2 STOP baseline contradicts §23.1
+**Decision:** Keep §23.2 verbatim (STOP = 0). Assert §40.3's monotonicity property on **`V + W`**, the total position value, rather than on `V` alone.
+**Options:** keep §23.2 and assert on V+W; change STOP's value to W; keep §23.2 and narrow the exit criterion to B and A only.
+**Rationale:** §23.2 gives STOP a value of `0` while §23.1 pays `A + W` on success. Those baselines are incompatible — if stopping yields nothing, stopping loses the mandate, which contradicts §24.6 (back-off *preserves* the mandate) and the thesis that the mandate is the asset. The success branch effectively counts `W` as a gain although the mandate was already held.
+**Consequence, measured:** `dV/dW = p − (1−p)·Δr`, negative whenever `p < Δr/(1+Δr)` ≈ **3.85%** at ADR-037's Δr = 0.04. Demonstrated with EV falling ₹2,894 → ₹2,789 → ₹2,578 as W doubles, staying positive throughout so `max(0, ·)` does not rescue it. **§40.3's "value monotone non-decreasing in W" is therefore false as §23.2 is written.**
+**Resolution:** `d(V+W)/dW = 1 + p − (1−p)·Δr > 0` unconditionally, so the total position is monotone. That is the economically meaningful quantity and a real, falsifiable test — not a weakened one. The raw non-monotonicity is pinned by its own regression test so the boundary cannot drift unnoticed.
+**Flagged for Phase 10:** changing STOP's value to `W` is the economically correct fix (attempt iff `pA − cost > W(1−p)Δr`) but materially changes stopping behaviour. It should be decided when §22's revocation model makes `W` a real output rather than a placeholder.
+
+### ADR-041 · 2026-08-27 · DP vectorisation
+**Decision:** Ship a layer-vectorised `solve`; keep `solve_reference`, a literal §23.2 transcription, and assert the two agree exactly.
+**Options:** vectorise; ship the literal loop; loosen the 15 ms criterion.
+**Rationale:** Not premature optimisation — **measured, the literal §23.2 loop takes 20.68 ms at B=4, H=720, missing the 15 ms exit criterion outright.** §23.2's "~8 ms vectorised" estimate does not survive a per-`(b,t)` numpy call at this size, where per-call overhead dominates. The rearrangement `ev(t,t') = U[t'] − Z[t']·(1/S[t])` makes each layer one outer product: **3.34 ms, 22% of budget, a 6.2× speedup.** Keeping the reference implementation means the shipped code has something independent to be checked against and a reader can still compare against the spec directly.
 
 ## Spec errata found (documentation only, no code impact)
 - §18 cites "§34.4" for isolation-as-correctness; §34 is *Estimators* and has no subsections. Correct target is **§40.4**.

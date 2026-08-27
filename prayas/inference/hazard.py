@@ -14,7 +14,7 @@ the entire remaining curve. Using the marginal probability instead of the
 conditional produces systematically wrong expected values and therefore
 systematically wrong stopping points."
 
-the modelling rules is blunter: "Getting this wrong is the most likely
+the modelling rules are blunter: "Getting this wrong is the most likely
 error in the whole project." So `conditional_probability` is written to make the
 distinction structural — it takes `t_last` as a required argument, and there is
 no function here that returns a marginal for a post-failure decision.
