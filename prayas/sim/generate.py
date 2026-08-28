@@ -99,6 +99,23 @@ def _payday_offsets(archetype: str, rng: np.random.Generator, horizon: int) -> l
     raise ValueError(f"unknown archetype: {archetype}")
 
 
+def _funding_hour(archetype: str, rng: np.random.Generator) -> int:
+    """Hours after the day boundary at which money actually lands.
+
+    Funding does not arrive at midnight sharp. Modelling it at whole-day
+    resolution makes the hazard curve a comb — a handful of spikes with zeros
+    between them — and between spikes `S(t)` is flat, so `p(t\'|t) = 1 - S(t\')/S(t)`
+    cannot separate adjacent slots and the sequencer has nothing to act on.
+
+    Salary credits clear in a tight early band; gig income arrives across the
+    working day. Bounded to under 24 hours so the *day* index is unchanged,
+    which keeps §21's day-level properties and Phase 4\'s tests intact.
+    """
+    if archetype in (SALARIED_1ST, SALARIED_7TH):
+        return int(rng.integers(0, 8))
+    return int(rng.integers(0, 24))
+
+
 def _issuer_outage_days(config: SimConfig, rng: np.random.Generator) -> set[int]:
     """Poisson outage onsets, LogNormal durations (§38)."""
     onsets = int(rng.poisson(config.outage_lambda * config.horizon_days))
@@ -173,8 +190,11 @@ def generate_cycle(
     masked = bool(cause in (NO_FUNDS, "fraud_hold") and rng.random() < config.mask_05_rate)
 
     first_funding = min((d for d in funding_days if d >= 0), default=None)
+    funding_hour = _funding_hour(archetype, rng)
     true_funding_time = (
-        due_at + timedelta(days=first_funding) if first_funding is not None else None
+        due_at + timedelta(days=first_funding, hours=funding_hour)
+        if first_funding is not None
+        else None
     )
 
     observables = _emit_events(

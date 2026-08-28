@@ -38,6 +38,15 @@ def check(rule_id: str, ctx: dict[str, Any]) -> bool:
 
 
 def hours_ago(hours: float) -> datetime:
+    """A timestamp `hours` in the past, evaluated *now*.
+
+    Must be called inside the test body, never in a `parametrize` list.
+    `hours_since` reads the clock at evaluation time, while a parametrize
+    argument is fixed at collection — and the suite takes over a minute to
+    reach this module, which is longer than the 61-second margin the 23h59m
+    boundary case allows. That drift made the case pass alone and fail in the
+    full run.
+    """
     return datetime.now(tz=UTC) - timedelta(hours=hours)
 
 
@@ -67,16 +76,23 @@ def test_npci_autopay_window(hour_ist: float, permitted: bool) -> None:
 
 
 @pytest.mark.parametrize(
-    ("label", "pdn_sent_at", "permitted"),
+    ("label", "sent_hours_ago", "permitted"),
     [
         ("no PDN at all", None, False),
-        ("23h59m ago", hours_ago(23.983), False),
-        ("exactly 24h ago", hours_ago(24.001), True),
-        ("48h ago", hours_ago(48), True),
-        ("in the future", hours_ago(-1), False),
+        ("23h59m ago", 23.983, False),
+        ("exactly 24h ago", 24.001, True),
+        ("48h ago", 48.0, True),
+        ("in the future", -1.0, False),
     ],
 )
-def test_rbi_pdn_24h(label: str, pdn_sent_at: datetime | None, permitted: bool) -> None:
+def test_rbi_pdn_24h(label: str, sent_hours_ago: float | None, permitted: bool) -> None:
+    """§40.2's 24-hour boundary, both sides.
+
+    The offset is the parameter and the timestamp is built here, so the gap
+    between constructing it and evaluating the rule is microseconds rather than
+    the length of the whole suite.
+    """
+    pdn_sent_at = None if sent_hours_ago is None else hours_ago(sent_hours_ago)
     assert check("RBI-EMANDATE-PDN-24H", {"pdn_sent_at": pdn_sent_at}) is permitted
 
 

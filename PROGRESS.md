@@ -1,7 +1,7 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 7 — Measurement plane
+Phase 8 — FIRST DEFENSIBLE NUMBER
 
 ## Phase status
 | # | Phase | Status | Closed on |
@@ -13,12 +13,27 @@ Phase 7 — Measurement plane
 | 4 | V0 intelligence | CLOSED | 2026-08-26 |
 | 5 | Sequencer | CLOSED | 2026-08-27 |
 | 6 | Executor | CLOSED | 2026-08-27 |
-| 7 | Measurement plane | IN PROGRESS | — |
-| 8 | FIRST DEFENSIBLE NUMBER | not started | — |
+| 7 | Measurement plane | CLOSED | 2026-08-29 |
+| 8 | FIRST DEFENSIBLE NUMBER | IN PROGRESS | — |
 | 9–19 | see Execution Playbook | not started | — |
 
-## Exit criteria — current phase (Phase 7 — Measurement plane)
-_Evidence from a run on 2026-08-27. Phase remains open pending confirmation._
+## Exit criteria — current phase (Phase 8 — FIRST DEFENSIBLE NUMBER)
+_Evidence from a run on 2026-08-29. **Four of six met; one partially met; see FINDING-P8-01.**_
+
+- [x] **10,000+ simulated cycles through the complete loop** — 12,000 generated, **7,019** entering the recovery population after excluding cycles whose first debit succeeded
+- [~] **Incremental recovery reported with CI, CUPED-adjusted** — CI **yes**: `+41.0 pp [+37.6, +44.5]`, SRM χ²=0.03 p=0.870 PASS. **CUPED not applied**: the simulator generates exactly one cycle per customer (1:1), so ADR-049's per-customer pre-period does not exist. Reported rather than faked with a substitute covariate
+- [x] **Attempts per recovery reported per arm** — treatment **1.51**, control **8.40**. Clears §6's "target below 2.0"
+- [x] **Zero compliance violations in treatment; baseline counted in shadow** — **0** breaches across 5,743 gated actions; §8 shadow count **21,057** violations for the literal 10:00 IST day-1/3/5 policy
+- [x] **Every decision replayable** — 250/250 replayed and hash-verified, exhaustively rather than sampled. Denials replay as readily as allowals (§32). A tampered record is detected while its neighbour still verifies
+- [x] **Robustness: lift survives every perturbation** — **9/9** under ADR-053's strict rule (CI excludes zero), across `non_absorbing`, both `mask_05` extremes, outage heavy/none, 3.5× chronically-dry, 3× revocation, 2× base failure
+
+**The number, and what it means.** `+41.0 pp` incremental recovery, 1.51 attempts per recovery versus 8.40, zero gate breaches, every decision replayable. **The lift is real and robust but is NOT attributable to liquidity forecasting** — replacing the fitted hazard with an uninformative prior reproduces it exactly in 9/9 perturbations. What it demonstrates is attempt economy under a hard regulatory budget. See FINDING-P8-01.
+
+- Gates: 696 tests, coverage 85.89% (floor 85), mypy --strict clean (62 files), ruff + ruff format clean
+
+## Closed phases
+
+### Phase 7 — Measurement plane · closed 2026-08-29
 
 - [x] **A/A test: incremental lift CI contains zero** — asserted as *coverage*, not a single replication: 600 A/A replications at n=4,000 per arm, intervals containing zero at the nominal ~95% rate. A single A/A passing would also pass for a badly miscalibrated interval. Paired with a guard test showing a real 6pp effect is still detected, so an estimator that always contained zero would fail
 - [x] **SRM passes across 100 seeds** — 100 seeds × 6,000 customers through the real `arm()` function (not simulated counts), zero failures. Plus a deliberately broken assignment (30% actual vs 10% registered) asserted to **fail**, so the check cannot pass by always saying "fine"
@@ -29,8 +44,6 @@ _Evidence from a run on 2026-08-27. Phase remains open pending confirmation._
 - Pre-registration enforced by privilege: `prayas_app` holds SELECT only on `experiment_config`, so the running application cannot re-seed after seeing results — asserted with a permission-denied test, the same construction Invariant 5 uses for the ledger
 - Statistics validated against **published reference data** (ADR-047): Freireich et al. (1963) — all 7 KM values to 3dp, median 8, log-rank χ² **16.79** and O=9/E=19.25, matching the published figures exactly; χ² tail against 5 standard table values
 - Gates: 684 tests, coverage 88.90% (floor 85), mypy --strict clean (58 files), ruff + ruff format clean
-
-## Closed phases
 
 ### Phase 6 — Executor · closed 2026-08-27
 - [x] **Kill worker mid-transaction: no orphaned debits, no lost timers** — a real subprocess `SIGKILL`'d after the budget decrement, before COMMIT. `attempts_used` back to 0, zero attempt rows, zero outbox rows, timer immediately re-claimable. A patched exception would have exercised Python's `finally`; only a real kill exercises Postgres's rollback
@@ -391,6 +404,93 @@ Each leaves Python to auto-inject the real builtins module. They survived becaus
 **Decision:** Extract the day-1/3/5 schedule into one shared policy module, cited by both §8's shadow audit and the experiment's control arm.
 **Options:** shared module; experiment imports the Phase 2 shadow implementation; separate implementations.
 **Rationale:** If the audit's baseline and the control arm ever diverge, the published claim that "the default retry behaviour produces N violations per 10,000 cycles" would describe a policy the experiment never ran, and the two numbers become quietly incomparable. Importing Phase 2's shadow harness directly would guarantee they match but couple the measurement plane to the gate's audit tooling, so a change made for the report silently alters the control arm. One definition both cite keeps the coupling explicit.
+
+### FINDING-P8-01 · 2026-08-29 · The lift does not come from the liquidity model
+**Status:** OPEN — three bugs found and fixed; the finding survives all three.
+
+**Bugs found and fixed while establishing this** (each was real, each changed the numbers):
+1. **Recovery population included cycles that never failed.** ~40% of generated cycles succeed on the first debit and are not recovery opportunities; both arms were being scored on free wins. Fixed by `recovery_population()`, selecting on the *observable* failure event, never on `true_cause`.
+2. **`control_slots` searched hour offsets for an exact 09:00 IST match**, so any cycle due at a non-round minute produced **zero** control attempts. The first run showed control recovering 0.0% — that was this bug, not a finding. Fixed by constructing 09:00 on the IST calendar day.
+3. **Attempt budget was 4, not 3.** §1 permits "one execution plus up to three retries"; the execution is the debit that already failed. Budgeting 4 handed the sequencer an attempt the regulator does not permit.
+
+**A fourth issue was fixed in the simulator:** funding landed only on whole-day boundaries, making `h(t)` a comb — 5 of 143 legal slots carried mass. Now dispersed within the day (salary credits in a tight morning band, gig income across the day), bounded under 24h so the *day* index is unchanged and Phase 4's day-level tests are untouched. **82 of 143 slots now carry mass.**
+
+**The finding survives every one of those fixes.**
+
+**What was measured** (4,000 cycles, 30% train split, 15% holdout, 7-day window):
+
+| | control (day-1/3/5 @ 09:00 IST) | treatment (DP) |
+|---|---|---|
+| recovery rate | 0.5653 | 0.8111 |
+| attempts per cycle | 1.64 | 1.00 |
+| attempts per recovery | 2.90 | 1.23 |
+
+Lift **+24.6pp**. It does not survive scrutiny.
+
+**The decisive test.** Replacing the fitted hazard with a **flat prior carrying
+no information at all** produces an identical lift — `+0.2458` both ways, equal
+to four decimal places, with identical treatment recovery and attempts. The
+liquidity model contributes nothing to the result.
+
+**Why.** Three compounding causes, each verified:
+1. **Half the funding mass (50.0%) arrives before the 24-hour notice lead**
+   (§30.1 RBI-EMANDATE-PDN-24H), so the system is not permitted to act on it.
+   Only 31.7% lands inside the legal window; 11.4% falls past the deadline.
+2. **The simulator funds on whole-day boundaries**, so h(t) in the legal region
+   is a comb — **5 of 143 slots carry any mass**. Between spikes S(t) is flat,
+   so `p(t'|t) = 1 − S(t')/S(t)` cannot separate adjacent slots.
+3. **§23.1's objective has no cost of delay.** It charges for attempts (`cost`,
+   `Δr·W`) but never for waiting, so with absorbing funding the last legal slot
+   weakly dominates. The DP fired at slot 167 of 168 in the large majority of cycles.
+
+**It is not a DP bug.** Given a curve with real structure in the legal region,
+the sequencer responds correctly: an early-mass curve is acted on at day 1, a
+flat one at day 3, neither at the last slot. The mechanism works; the signal it
+is handed carries no usable structure. Pinned by `test_the_dp_itself_is_not_degenerate`.
+
+**What does survive.** Attempts per recovery — **1.23 vs 2.90** — is a real §6
+efficiency result, and it clears the spec's "target below 2.0". But it comes
+from spending one attempt late rather than three early, not from placing an
+attempt where money is expected. Claiming it as liquidity awareness would be
+false.
+
+**Options** (Class A, unresolved): make delay costly in the objective; give the
+simulator sub-daily funding so the curve has usable structure; shorten the
+notice lead scenario so more signal is actionable; or accept the efficiency
+claim alone and drop the liquidity claim from Phase 8's sentence.
+
+### ADR-051 · 2026-08-29 · Holdout percentage
+**Decision:** 15% control, matching §6's artifact sentence.
+**Options:** 15%; 50% (maximum power); 20%.
+**Rationale:** The Playbook's Phase 8 artifact sentence embeds "a pre-registered, seed-committed 15% holdout", so producing that sentence honestly requires running at 15%. It is also the ratio a real pilot would use, so Phase 18 inherits a harness proven at the split it will actually run. At 10,000 cycles this gives roughly ±2.5pp on the interval. **If underpowered, the fix is more cycles, not a larger holdout** — enlarging the control share to manufacture significance would change what is being claimed.
+
+### ADR-052 · 2026-08-29 · Pre-debit notification in the A/B comparison
+**Decision:** Both arms send an identical, compliant fixed-timing PDN. §8's violation audit runs as a **separate** shadow pass with no PDN, exactly as before.
+**Options:** split the two claims; control sends no PDN as the real default does; PDN in treatment only.
+**Rationale:** §30.1's RBI-EMANDATE-PDN-24H denies any debit without 24h notice, and §8's shadow baseline deliberately sends none — that absence *is* the audit finding. Had the control arm also sent none, the gate would deny every control debit, control recovery would be ~zero, and the reported "lift" would equal treatment recovery outright: a tautology dressed as an incremental measurement, and the most attackable number in the project. Holding the PDN identical across arms means the only thing varying is **attempt timing**, which is what the sequencer does. PDN-in-treatment-only was rejected because it confounds sequencing with notification and spends Phase 9's entire contribution before Phase 9 exists.
+**Consequence:** two distinct claims, neither contaminating the other — "the mainstream default is unlawful on Indian rails" (§8 audit) and "optimised timing beats calendar timing" (the A/B).
+
+### ADR-053 · 2026-08-29 · Robustness pass/fail rule
+**Decision:** The lift's 95% CI must **exclude zero under every §38 perturbation**. Fixed before any numbers exist.
+**Options:** CI excludes zero everywhere; point estimate positive everywhere; strict at defaults and point-positive elsewhere.
+**Rationale:** The strict reading of "lift survives every simulator perturbation". A lift that only reaches significance at default parameters is a finding about the defaults, not about the sequencer. A positive point estimate with an interval spanning zero is not evidence. Setting the bar before seeing results is what stops it being negotiated downward afterwards — and if it fails, that failure is exactly the information the Playbook says Phase 8 exists to surface: "much cheaper now than after eleven more phases."
+
+### ADR-054 · 2026-08-29 · Control arm execution hour
+**Decision:** The control arm keeps the day-1/3/5 cadence exactly but fires at **09:00 IST** (inside the pre-10:00 NPCI window). §8's audit keeps the literal 10:00 IST version unchanged.
+**Options:** same cadence at a legal hour; literal 10:00 IST denied by the gate; snap each attempt to the nearest legal slot.
+**Rationale:** The literal baseline fires at 10:00 IST, inside the NPCI morning peak — Phase 2 measured exactly this as **30,000 unlawful attempts per 10,000 cycles**. Run through the gate as §33 requires, every control attempt would be denied, control recovery would be zero, and the lift would equal treatment recovery: the same tautology ADR-052 resolved for the PDN, arriving via execution windows instead. Moving the hour holds compliance constant so the only thing varying is *which legal slot* is chosen — which is what the sequencer actually does. It is also the **conservative** direction: control becomes a competent lawful baseline rather than a strawman, making the measured lift harder to achieve. "Nearest legal slot" was rejected because it moves different attempts by different amounts for reasons unrelated to liquidity, and the artifact sentence has to be able to name what the baseline was.
+**Consequence:** the §8 violation count and the A/B lift are two separate claims from two separate runs, as ADR-052 already established.
+
+### ADR-055 · 2026-08-29 · Recovery window
+**Decision:** `DUNNING_WINDOW_DAYS = 7` — the merchant's dunning window, after which the cycle is written off.
+**Rationale:** §36 already has `cycles.deadline_at` and §23.4 already hard-stops past it; the simulator merely set it to the full 30-day horizon so it never bound. 7 days accommodates the day-1/3/5 baseline in full, so the control arm is not handicapped by the window. Swept by the robustness suite (ADR-053).
+**Measured consequence:** binding the deadline shortened the wait but did **not** remove the degeneracy — the DP simply fires at the last legal slot before the new deadline. Recorded because it is evidence that the deadline was not the binding constraint; the missing delay term in §23.1 is.
+
+### ADR-056 · 2026-08-29 · Sub-daily funding in the simulator
+**Decision:** Funding lands at an archetype-specific hour within its day — salary credits in a tight 0-8h band, gig income across 0-24h — bounded under 24 hours so the day index is unchanged.
+**Options:** sub-daily dispersion; leave whole-day funding; model absolute IST clock hours.
+**Rationale:** Whole-day funding made `h(t)` a comb (5 of 143 legal slots with mass), so `S(t)` was flat between spikes and `p(t'|t)` could not separate adjacent slots — the sequencer had nothing to act on. Real money does not arrive at midnight sharp. Bounding under 24h keeps `delta.days` unchanged, so §21's day-level properties and Phase 4's closed tests are untouched. Absolute IST clock hours were rejected: setting an absolute hour can move funding across the day boundary relative to `due_at`, which would have changed Phase 4's `h(0) > 0.5` artifact.
+**Measured consequence:** 82 of 143 legal slots now carry mass — and the lift is *still* identical to an uninformative prior, which is what isolates the cause to the objective rather than the curve.
 
 ## Spec errata found (documentation only, no code impact)
 - §18 cites "§34.4" for isolation-as-correctness; §34 is *Estimators* and has no subsections. Correct target is **§40.4**.
