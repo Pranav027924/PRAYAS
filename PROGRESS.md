@@ -1,7 +1,7 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 6 — Executor
+Phase 7 — Measurement plane
 
 ## Phase status
 | # | Phase | Status | Closed on |
@@ -12,14 +12,27 @@ Phase 6 — Executor
 | 3 | Simulator | CLOSED | 2026-08-26 |
 | 4 | V0 intelligence | CLOSED | 2026-08-26 |
 | 5 | Sequencer | CLOSED | 2026-08-27 |
-| 6 | Executor | IN PROGRESS | — |
-| 7 | Measurement plane | not started | — |
+| 6 | Executor | CLOSED | 2026-08-27 |
+| 7 | Measurement plane | IN PROGRESS | — |
 | 8 | FIRST DEFENSIBLE NUMBER | not started | — |
 | 9–19 | see Execution Playbook | not started | — |
 
-## Exit criteria — current phase (Phase 6 — Executor)
+## Exit criteria — current phase (Phase 7 — Measurement plane)
 _Evidence from a run on 2026-08-27. Phase remains open pending confirmation._
 
+- [x] **A/A test: incremental lift CI contains zero** — asserted as *coverage*, not a single replication: 600 A/A replications at n=4,000 per arm, intervals containing zero at the nominal ~95% rate. A single A/A passing would also pass for a badly miscalibrated interval. Paired with a guard test showing a real 6pp effect is still detected, so an estimator that always contained zero would fail
+- [x] **SRM passes across 100 seeds** — 100 seeds × 6,000 customers through the real `arm()` function (not simulated counts), zero failures. Plus a deliberately broken assignment (30% actual vs 10% registered) asserted to **fail**, so the check cannot pass by always saying "fine"
+- [x] **CUPED demonstrably reduces variance** — >5% reduction on simulated data with a genuine per-customer pre-period correlation, and the mean asserted unchanged to 1e-9, since a "reduction" that moved the estimate would be bias. Plus an unrelated covariate asserted to yield **<1%**, so CUPED cannot appear to help by fitting noise
+- [x] **Every ledger record carries an arm and a propensity** — 40 fired decisions, zero NULL `holdout_arm`, zero NULL `propensity`, both arms present. Logged propensity asserted to equal the probability its recorded arm actually had. **Refusals carry an arm too** (40 STALE records, zero missing) — excluding them would bias every estimate toward cycles that happened to clear the gate. With no experiment running the arm is NULL, not invented
+- [x] **Guardrails compute correctly, including unflattering ones** — each of §6's five asserted to breach on bad input *and* pass on good; a guardrail that never fires is indistinguishable from a broken one. The net-value guardrail breaches on a case where recovery alone looks strongly positive but induced churn cancels it
+- Artifact: batch report rendered by machinery — SRM gate, the §6 matched pair, CUPED, efficiency, §35 net value, all five guardrails, and a verdict. **An SRM failure blocks it entirely**: no estimate is printed, asserted by checking the numbers do not leak into the output
+- Pre-registration enforced by privilege: `prayas_app` holds SELECT only on `experiment_config`, so the running application cannot re-seed after seeing results — asserted with a permission-denied test, the same construction Invariant 5 uses for the ledger
+- Statistics validated against **published reference data** (ADR-047): Freireich et al. (1963) — all 7 KM values to 3dp, median 8, log-rank χ² **16.79** and O=9/E=19.25, matching the published figures exactly; χ² tail against 5 standard table values
+- Gates: 684 tests, coverage 88.90% (floor 85), mypy --strict clean (58 files), ruff + ruff format clean
+
+## Closed phases
+
+### Phase 6 — Executor · closed 2026-08-27
 - [x] **Kill worker mid-transaction: no orphaned debits, no lost timers** — a real subprocess `SIGKILL`'d after the budget decrement, before COMMIT. `attempts_used` back to 0, zero attempt rows, zero outbox rows, timer immediately re-claimable. A patched exception would have exercised Python's `finally`; only a real kill exercises Postgres's rollback
 - [x] **Kill after outbox insert, before provider call: relay resumes with same key** — `SIGKILL` in exactly that window; exactly one durable intent, still `pending`, attempt and outbox agreeing on the key. The relay then submitted **that same key**, one debit
 - [x] **10% injected provider timeouts: zero double debits, all reconciled** — 40 cycles; ambiguous rows held their budget slots (`sum(attempts_used) == 40`, zero over budget), then all reconciled. Every key submitted exactly **once** — reconciliation *queries* by key rather than re-submitting
@@ -28,8 +41,6 @@ _Evidence from a run on 2026-08-27. Phase remains open pending confirmation._
 - Stack: `docker compose up --wait` brings postgres, migrate, api, chain-verifier **and the new `executor` service** to healthy; `/health` → 200
 - Migration `0009_tenant_registry_fn` reverses and re-applies cleanly
 - Gates: 621 tests, coverage 88.91% (floor 85), mypy --strict clean (49 files), ruff + ruff format clean
-
-## Closed phases
 
 ### Phase 5 — Sequencer · closed 2026-08-27
 - [x] **DP matches brute-force enumeration for `B ≤ 3`, `H ≤ 40`** — 27 parametrised cases (B∈{1,2,3} × H∈{10,25,40} × 3 seeds), every state compared, plus 6 cases asserting the DP's *chosen slot* realises the value the objective predicts. The enumerator is transcribed from §23.1's equation, not from the DP module
@@ -359,6 +370,27 @@ Each leaves Python to auto-inject the real builtins module. They survived becaus
 ### ADR-047 · 2026-08-27 · Claim and fire are separate transactions
 **Decision:** The worker claims in one transaction and fires each action in its own, rather than doing both in one.
 **Rationale:** Recorded because it looks like a granularity choice and is actually a **correctness** one. Claiming locks `scheduled_actions`; firing locks `cycles` then `scheduled_actions`. Combining them acquires the two tables actions-first, while the late-capture guard acquires them cycle-first — opposite orders, which deadlocks under exactly the race Phase 6's adversarial test covers (observed as `DeadlockDetectedError` before the split). Separating them makes every path lock the cycle first. It also keeps a crash's blast radius to one action and stops one tenant's failure rolling back another's committed work.
+
+### ADR-047 · 2026-08-27 · Survival and test statistics
+**Decision:** Hand-roll Kaplan-Meier, the log-rank test and the SRM χ², validated against published reference data. No new dependency.
+**Options:** hand-rolled with reference tests; add `lifelines`; add `scipy` only.
+**Rationale:** Both comparisons here are two-arm, so the only distribution needed is χ² with **1 degree of freedom**, which is exactly `math.erfc(sqrt(x/2))` from the standard library — no approximation, no scipy. §40.2 already establishes the pattern of checking "Wilson bound and CUSUM against reference implementations". `lifelines` would pull scipy, pandas and matplotlib for two estimators; `scipy` alone solves the easy half (χ² tail) while leaving KM and log-rank to be written anyway. Keeping the estimators in-repo also keeps them auditable, which matters for a system whose claim is defensibility.
+
+### ADR-048 · 2026-08-27 · What `decisions.propensity` records
+**Decision:** The **arm-assignment probability** — P(this cycle received the arm it received), i.e. `control_pct` or its complement.
+**Options:** arm-assignment probability; add exploration to the sequencer; record 1.0 and defer.
+**Rationale:** §34 requires propensity logged at decision time, but the Phase 5 DP is deterministic — it argmaxes — so the chosen *action* has propensity 1.0 and action-level IPS degenerates. The genuine randomisation in this system is §33's arm assignment, so logging that makes IPS and doubly-robust valid at the arm level, which is what the A/B comparison actually needs. Adding exploration would mean deliberately firing slots the DP priced as worse, spending real attempt budget, and reopening Phase 5's closed money path — a product decision, not a measurement one. Recording a bare 1.0 would satisfy the exit criterion in letter while carrying no information.
+**Recorded limitation:** action-level off-policy evaluation is unavailable until the sequencer explores. Stated rather than implied.
+
+### ADR-049 · 2026-08-27 · CUPED pre-period
+**Decision:** Per-customer recovery rate over the **3 cycles immediately preceding assignment**; customers with fewer than 3 prior cycles take the cohort mean.
+**Options:** 3 prior cycles per customer; fixed 90-day calendar window; all prior cycles per mandate.
+**Rationale:** §34 names the covariate but not the window. Appendix C already sets `memory.min_cycles_for_profile: 3`, so the window comes from published config rather than being invented, and it matches the unit of randomisation (§33 randomises per customer). A calendar window mixes weekly and monthly billing, so covariate reliability varies across the population. Using all prior cycles makes precision a function of mandate age, which correlates with survival — the outcome being measured — risking a tenure artefact in the adjusted estimate. Falling back to the cohort mean prevents θ being fitted on missing data, which would reintroduce the bias CUPED exists to remove.
+
+### ADR-050 · 2026-08-27 · Baseline policy location
+**Decision:** Extract the day-1/3/5 schedule into one shared policy module, cited by both §8's shadow audit and the experiment's control arm.
+**Options:** shared module; experiment imports the Phase 2 shadow implementation; separate implementations.
+**Rationale:** If the audit's baseline and the control arm ever diverge, the published claim that "the default retry behaviour produces N violations per 10,000 cycles" would describe a policy the experiment never ran, and the two numbers become quietly incomparable. Importing Phase 2's shadow harness directly would guarantee they match but couple the measurement plane to the gate's audit tooling, so a change made for the report silently alters the control arm. One definition both cite keeps the coupling explicit.
 
 ## Spec errata found (documentation only, no code impact)
 - §18 cites "§34.4" for isolation-as-correctness; §34 is *Estimators* and has no subsections. Correct target is **§40.4**.

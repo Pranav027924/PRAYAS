@@ -22,21 +22,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Final
+from typing import Final
 
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from prayas.gate.engine import ALLOW, evaluate
+from prayas.policy.baseline import BASELINE_HOUR_IST as _BASELINE_HOUR_IST
+from prayas.policy.baseline import BASELINE_RETRY_DAYS as _BASELINE_RETRY_DAYS
+from prayas.policy.baseline import baseline_attempts
 
 #: IST is UTC+5:30. Times are stored UTC and evaluated IST (project standard).
 IST_OFFSET: Final = timedelta(hours=5, minutes=30)
 
-#: The day-1/3/5 schedule most dunning tools ship as their default.
-BASELINE_RETRY_DAYS: Final[tuple[int, ...]] = (1, 3, 5)
-
-#: Baseline tools retry at a fixed clock time, typically business hours.
-#: 10:00 IST sits squarely inside the NPCI peak window, which is the point.
-BASELINE_HOUR_IST: Final = 10.0
+# ADR-050: the day-1/3/5 schedule lives in one place, because §8's audit and
+# Phase 7's control arm must be the same policy or the two numbers are not
+# comparable. Re-exported here so existing callers keep working.
+BASELINE_RETRY_DAYS: Final[tuple[int, ...]] = _BASELINE_RETRY_DAYS
+BASELINE_HOUR_IST: Final = _BASELINE_HOUR_IST
 
 
 def hour_ist(moment: datetime) -> float:
@@ -82,28 +84,6 @@ class ShadowReport:
             f"{window:.0f} debit attempts outside NPCI execution windows and "
             f"{pdn:.0f} debits without valid 24-hour pre-debit notice, per 10,000 cycles."
         )
-
-
-def baseline_attempts(first_failure: datetime, *, send_pdn: bool = False) -> list[dict[str, Any]]:
-    """The day-1/3/5 schedule a mainstream dunning tool would produce.
-
-    `send_pdn=False` is the realistic default: the pre-debit notification is a
-    requirement of the Indian e-mandate framework that tools designed for card
-    rails do not model at all, which is precisely what §8 measures.
-    """
-    attempts: list[dict[str, Any]] = []
-    for day in BASELINE_RETRY_DAYS:
-        fire_at = (first_failure + timedelta(days=day)).replace(
-            hour=4, minute=30, second=0, microsecond=0
-        )  # 04:30 UTC == 10:00 IST
-        attempts.append(
-            {
-                "fire_at": fire_at,
-                "hour_ist": BASELINE_HOUR_IST,
-                "pdn_sent_at": fire_at - timedelta(hours=25) if send_pdn else None,
-            }
-        )
-    return attempts
 
 
 async def evaluate_baseline_policy(

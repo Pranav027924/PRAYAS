@@ -52,6 +52,7 @@ from prayas.executor.claiming import (
 from prayas.executor.idempotency import idem_key
 from prayas.gate.engine import evaluate
 from prayas.ledger.chain import append
+from prayas.measure.experiment import Experiment, active_experiment
 from prayas.observability import metrics
 
 log = logging.getLogger(__name__)
@@ -97,6 +98,12 @@ async def fire_action(
     fired_at = now or datetime.now(tz=UTC)
     decision_id = f"dec_{uuid.uuid4().hex[:24]}"
 
+    # §34 requires propensity be logged *at decision time*, not reconstructed
+    # later — a propensity inferred after the fact is not evidence about how
+    # the action came to be chosen. Resolved once here and carried into every
+    # ledger record this call writes, including the refusals.
+    experiment = await active_experiment(conn)
+
     if action.cycle_id is None:
         return FireOutcome(False, "no_cycle", decision_id, detail="action has no cycle")
 
@@ -106,7 +113,7 @@ async def fire_action(
             text(
                 "SELECT c.cycle_id, c.mandate_id, c.amount_paise, c.state,"
                 "       c.attempts_used, c.attempt_budget, c.deadline_at,"
-                "       c.pdn_sent_at, m.state AS mandate_state, m.rail,"
+                "       c.pdn_sent_at, m.customer_id, m.state AS mandate_state, m.rail,"
                 "       m.consent_ref, m.mcc"
                 "  FROM cycles c JOIN mandates m ON m.mandate_id = c.mandate_id"
                 " WHERE c.tenant_id = :tenant_id AND c.cycle_id = :cycle_id"
@@ -134,6 +141,8 @@ async def fire_action(
             rationale=f"fire-time revalidation refused: {stale}",
             ts=fired_at,
             degraded=False,
+            experiment=experiment,
+            customer_id=cycle.customer_id,
         )
         await release_action(conn, action.action_id, action.tenant_id, state=STATE_CANCELLED)
         return FireOutcome(False, stale, decision_id, verdict="STALE")
@@ -170,6 +179,8 @@ async def fire_action(
             ),
             ts=fired_at,
             degraded=False,
+            experiment=experiment,
+            customer_id=cycle.customer_id,
         )
         await release_action(conn, action.action_id, action.tenant_id, state=STATE_DONE)
         return FireOutcome(False, "budget_exhausted", decision_id, verdict="DENY")
@@ -195,6 +206,8 @@ async def fire_action(
             rationale=f"gate returned {gate.verdict} at fire time",
             ts=fired_at,
             degraded=gate.degraded,
+            experiment=experiment,
+            customer_id=cycle.customer_id,
         )
         await release_action(conn, action.action_id, action.tenant_id, state=STATE_CANCELLED)
         return FireOutcome(False, "gate_denied", decision_id, verdict=gate.verdict)
@@ -212,6 +225,8 @@ async def fire_action(
         ts=fired_at,
         degraded=gate.degraded,
         chosen_action={"action_type": action.action_type, "idem_key": key},
+        experiment=experiment,
+        customer_id=cycle.customer_id,
     )
 
     # ── INSERT attempt, then outbox. Intent durable before any call. ─────
@@ -319,6 +334,8 @@ async def _record(
     rationale: str,
     ts: datetime,
     degraded: bool,
+    experiment: Experiment | None = None,
+    customer_id: str | None = None,
     chosen_action: dict[str, Any] | None = None,
 ) -> None:
     """Append the fire-time decision to the tenant's chain (§32).
@@ -326,6 +343,14 @@ async def _record(
     Written for refusals as well as firings: "a denial is the proof the gate
     works."
     """
+    # ADR-048: propensity is the arm-assignment probability. The sequencer is
+    # deterministic, so the chosen action's own propensity is 1.0 and carries
+    # no information; the genuine randomisation is §33's assignment.
+    arm = prop = None
+    if experiment is not None and customer_id:
+        arm = experiment.arm_for(customer_id)
+        prop = experiment.propensity_for(customer_id)
+
     await append(
         conn,
         {
@@ -346,8 +371,8 @@ async def _record(
             "chosen_action": json.dumps(chosen_action) if chosen_action else None,
             "rationale": rationale,
             "compliance_checks": json.dumps(checks, default=str),
-            "holdout_arm": None,
-            "propensity": None,
+            "holdout_arm": arm,
+            "propensity": prop,
             "degraded": degraded,
             "outcome": None,
             "outcome_ts": None,
