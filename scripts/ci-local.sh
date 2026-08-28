@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Run exactly what CI's `quality` job runs, in the same order.
+#
+# This exists because a narrower local command let five consecutive CI runs go
+# red while local checks looked clean: CI type-checks `prayas` *and* `tests`
+# under --strict, and only `prayas` was being checked here. Any divergence
+# between this script and .github/workflows/ci.yml is a bug in one of them.
+set -uo pipefail
+
+cd "$(dirname "$0")/.." || exit 1
+
+: "${PRAYAS_DATABASE_URL_OWNER:=postgresql+asyncpg://prayas_owner:prayas_local_dev_only@localhost:5432/prayas}"
+: "${PRAYAS_DATABASE_URL_APP:=postgresql+asyncpg://prayas_app:prayas_local_dev_only@localhost:5432/prayas}"
+: "${PRAYAS_APP_DB_PASSWORD:=prayas_local_dev_only}"
+: "${PRAYAS_ENV:=local}"
+export PRAYAS_DATABASE_URL_OWNER PRAYAS_DATABASE_URL_APP PRAYAS_APP_DB_PASSWORD PRAYAS_ENV
+
+failed=0
+
+step() {
+  local name="$1"; shift
+  printf '\n=== %s ===\n' "$name"
+  if "$@"; then
+    printf '    ok\n'
+  else
+    printf '    FAILED\n'
+    failed=1
+  fi
+}
+
+step "Lint"            uv run ruff check .
+step "Format check"    uv run ruff format --check .
+step "Type check"      uv run mypy --strict prayas tests
+step "Apply migrations" uv run alembic upgrade head
+step "Tests with coverage floor" uv run pytest --cov --cov-report=term-missing
+
+# Audits the resolved lockfile, exactly as CI does. `--no-emit-project` matters:
+# the local `prayas` distribution is not on PyPI, and --strict treats an
+# unauditable dependency as a failure.
+#
+# Needs network, so an offline sandbox skips rather than fails — a DNS error is
+# not a vulnerability finding, and reporting it as one would train the reader to
+# ignore this step.
+printf '\n=== Dependency vulnerability scan ===\n'
+uv export --no-emit-project --format requirements-txt > /tmp/requirements.txt 2>/dev/null
+if uv run pip-audit --strict -r /tmp/requirements.txt >/tmp/pip-audit.log 2>&1; then
+  printf '    ok\n'
+elif grep -qiE "Failed to resolve|NameResolutionError|Max retries exceeded|Temporary failure" /tmp/pip-audit.log; then
+  printf '    SKIPPED (no network); CI runs this for real\n'
+else
+  tail -5 /tmp/pip-audit.log
+  printf '    FAILED\n'
+  failed=1
+fi
+
+printf '\n'
+if [ "$failed" -eq 0 ]; then
+  printf 'All CI checks passed locally.\n'
+else
+  printf 'At least one CI check FAILED. Do not push.\n'
+fi
+exit "$failed"

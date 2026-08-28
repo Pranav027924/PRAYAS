@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import numpy as np
 
 from prayas.domain.rails import IST, UpiAutopayAdapter
-from prayas.sequencer.dp import solve
+from prayas.sequencer.dp import Policy, solve
 from prayas.sequencer.economics import (
     attempt_cost_matrix,
     continuation_value_paise,
     health_multiplier,
     revocation_delta,
 )
-from prayas.sequencer.explain import format_explanation, rank_candidates
+from prayas.sequencer.explain import Candidate, format_explanation, rank_candidates
 from prayas.sequencer.windows import build_mask
 
 BUDGET = 4
@@ -51,16 +52,16 @@ def _failed_cycle() -> dict[str, object]:
     }
 
 
-def _ranked(scenario: dict[str, object], budget_remaining: int = 3):
+def _ranked(scenario: dict[str, Any], budget_remaining: int = 3) -> tuple[Policy, list[Candidate]]:
     dp_args = {k: v for k, v in scenario.items() if k != "times"}
-    policy = solve(**dp_args)  # type: ignore[arg-type]
+    policy = solve(**dp_args)
     # `rank_candidates` takes `budget_remaining`, not the cycle's full `budget`.
     rank_args = {k: v for k, v in scenario.items() if k != "budget"}
     return policy, rank_candidates(
         policy=policy,
         budget_remaining=budget_remaining,
         last_failure_slot=0,
-        **rank_args,  # type: ignore[arg-type]
+        **rank_args,
     )
 
 

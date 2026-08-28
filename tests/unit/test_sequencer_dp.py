@@ -10,7 +10,6 @@ import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from numpy.typing import NDArray
 
 from prayas.sequencer.dp import (
     STOP,
@@ -19,13 +18,12 @@ from prayas.sequencer.dp import (
     solve_reference,
     stopping_rationale,
 )
-
-FloatArray = NDArray[np.float64]
+from tests.dp_scenario import FloatArray, Scenario
 
 
 def _scenario(
     rng: np.random.Generator, horizon: int, budget: int, *, legal_rate: float = 0.4
-) -> dict[str, object]:
+) -> Scenario:
     """A random but well-formed DP instance."""
     # Monotone non-increasing survival, strictly positive so the conditional
     # hazard is defined everywhere.
@@ -53,7 +51,7 @@ def _scenario(
     }
 
 
-def _brute_force_value(scenario: dict[str, object], budget: int, t: int) -> float:
+def _brute_force_value(scenario: Scenario, budget: int, t: int) -> float:
     """Expected value by unmemoised enumeration, written from §23.1's equation.
 
     Deliberately transcribed from the *objective*:
@@ -67,11 +65,11 @@ def _brute_force_value(scenario: dict[str, object], budget: int, t: int) -> floa
     if budget == 0:
         return 0.0
 
-    survival: FloatArray = scenario["survival"]  # type: ignore[assignment]
+    survival: FloatArray = scenario["survival"]
     legal = scenario["legal"]
     cost = scenario["cost"]
-    dr: FloatArray = scenario["dr"]  # type: ignore[assignment]
-    health: FloatArray = scenario["health"]  # type: ignore[assignment]
+    dr: FloatArray = scenario["dr"]
+    health: FloatArray = scenario["health"]
     amount = scenario["amount_paise"]
     w = scenario["continuation_value_paise"]
     lead = scenario["lead_slots"]
@@ -79,16 +77,12 @@ def _brute_force_value(scenario: dict[str, object], budget: int, t: int) -> floa
     horizon = survival.shape[0]
 
     best = 0.0  # STOP
-    for nxt in range(t + lead, horizon):  # type: ignore[operator]
-        if not legal[nxt]:  # type: ignore[index]
+    for nxt in range(t + lead, horizon):
+        if not legal[nxt]:
             continue
-        p = (1.0 - survival[nxt] / survival[t]) * health[nxt] * p_rec  # type: ignore[operator]
+        p = (1.0 - survival[nxt] / survival[t]) * health[nxt] * p_rec
         continued = _brute_force_value(scenario, budget - 1, nxt)
-        ev = (
-            p * (amount + w)  # type: ignore[operator]
-            + (1.0 - p) * (continued - dr[nxt] * w)  # type: ignore[operator]
-            - cost[budget][nxt]  # type: ignore[index]
-        )
+        ev = p * (amount + w) + (1.0 - p) * (continued - dr[nxt] * w) - cost[budget][nxt]
         best = max(best, float(ev))
     return best
 
@@ -103,7 +97,7 @@ def test_dp_matches_brute_force_enumeration(budget: int, horizon: int, seed: int
     """§23.2 solved exactly, checked against enumeration of the objective."""
     rng = np.random.default_rng(seed)
     scenario = _scenario(rng, horizon, budget)
-    policy = solve(**scenario)  # type: ignore[arg-type]
+    policy = solve(**scenario)
 
     for t in range(horizon):
         expected = _brute_force_value(scenario, budget, t)
@@ -120,7 +114,7 @@ def test_dp_chooses_the_same_slot_as_brute_force(budget: int, seed: int) -> None
     rng = np.random.default_rng(seed)
     horizon = 30
     scenario = _scenario(rng, horizon, budget)
-    policy = solve(**scenario)  # type: ignore[arg-type]
+    policy = solve(**scenario)
 
     survival = scenario["survival"]
     cost = scenario["cost"]
@@ -134,11 +128,11 @@ def test_dp_chooses_the_same_slot_as_brute_force(budget: int, seed: int) -> None
         chosen = policy.best_slot(budget, t)
         if chosen is None:
             continue
-        p = (1.0 - survival[chosen] / survival[t]) * health[chosen] * p_rec  # type: ignore[index,operator]
+        p = (1.0 - survival[chosen] / survival[t]) * health[chosen] * p_rec
         expected_ev = (
-            p * (amount + w)  # type: ignore[operator]
-            + (1.0 - p) * (_brute_force_value(scenario, budget - 1, chosen) - dr[chosen] * w)  # type: ignore[index,operator]
-            - cost[budget][chosen]  # type: ignore[index]
+            p * (amount + w)
+            + (1.0 - p) * (_brute_force_value(scenario, budget - 1, chosen) - dr[chosen] * w)
+            - cost[budget][chosen]
         )
         assert float(expected_ev) == pytest.approx(
             policy.expected_value_paise(budget, t), rel=1e-9, abs=1e-6
@@ -150,8 +144,8 @@ def test_vectorised_solve_matches_the_literal_spec_transcription() -> None:
     for seed in range(6):
         rng = np.random.default_rng(100 + seed)
         scenario = _scenario(rng, 60, 4)
-        fast = solve(**scenario)  # type: ignore[arg-type]
-        ref = solve_reference(**scenario)  # type: ignore[arg-type]
+        fast = solve(**scenario)
+        ref = solve_reference(**scenario)
 
         np.testing.assert_allclose(fast.value, ref.value, rtol=1e-9, atol=1e-6)
         np.testing.assert_array_equal(fast.action, ref.action)
@@ -169,7 +163,7 @@ def test_value_is_monotone_non_decreasing_in_budget(seed: int, horizon: int) -> 
     """§40.3 — more attempts remaining can never be worth less."""
     rng = np.random.default_rng(seed)
     scenario = _scenario(rng, horizon, 4)
-    policy = solve(**scenario)  # type: ignore[arg-type]
+    policy = solve(**scenario)
 
     for b in range(1, 5):
         assert np.all(policy.value[b] >= policy.value[b - 1] - 1e-6), (
@@ -184,11 +178,11 @@ def test_value_is_monotone_non_decreasing_in_amount(seed: int) -> None:
     rng = np.random.default_rng(seed)
     base = _scenario(rng, 24, 3)
 
-    richer = dict(base)
-    richer["amount_paise"] = int(base["amount_paise"]) * 2  # type: ignore[arg-type]
+    richer: Scenario = dict(base)  # type: ignore[assignment]
+    richer["amount_paise"] = base["amount_paise"] * 2
 
-    lo = solve(**base)  # type: ignore[arg-type]
-    hi = solve(**richer)  # type: ignore[arg-type]
+    lo = solve(**base)
+    hi = solve(**richer)
     assert np.all(hi.value >= lo.value - 1e-6)
 
 
@@ -210,14 +204,14 @@ def test_total_position_value_is_monotone_in_continuation_value(seed: int) -> No
     rng = np.random.default_rng(seed)
     base = _scenario(rng, 24, 3)
 
-    valuable = dict(base)
-    valuable["continuation_value_paise"] = int(base["continuation_value_paise"]) * 2  # type: ignore[arg-type]
+    valuable: Scenario = dict(base)  # type: ignore[assignment]
+    valuable["continuation_value_paise"] = base["continuation_value_paise"] * 2
 
-    lo = solve(**base)  # type: ignore[arg-type]
-    hi = solve(**valuable)  # type: ignore[arg-type]
+    lo = solve(**base)
+    hi = solve(**valuable)
 
-    lo_total = lo.value + int(base["continuation_value_paise"])  # type: ignore[arg-type]
-    hi_total = hi.value + int(valuable["continuation_value_paise"])  # type: ignore[arg-type]
+    lo_total = lo.value + base["continuation_value_paise"]
+    hi_total = hi.value + valuable["continuation_value_paise"]
     assert np.all(hi_total >= lo_total - 1e-6)
 
 
@@ -272,7 +266,7 @@ def test_dp_uses_the_conditional_hazard_not_the_marginal() -> None:
     survival = np.clip(np.cumprod(np.full(horizon, 0.9)), 1e-6, 1.0).astype(np.float64)
     legal = np.ones(horizon, dtype=np.bool_)
     amount = 100_000
-    scenario: dict[str, object] = {
+    scenario: Scenario = {
         "survival": survival,
         "legal": legal,
         "cost": np.zeros((2, horizon), dtype=np.int64),
@@ -284,7 +278,7 @@ def test_dp_uses_the_conditional_hazard_not_the_marginal() -> None:
         "lead_slots": 0,
         "p_recoverable": 1.0,
     }
-    policy = solve(**scenario)  # type: ignore[arg-type]
+    policy = solve(**scenario)
 
     late = 10
     # Conditional: 1 - S[t']/S[10]. Marginal would be 1 - S[t'].
@@ -321,7 +315,7 @@ def test_survival_must_be_monotone() -> None:
 # ── Exit criterion: stopping rationale carries real rupee figures ────────────
 
 
-def _stopping_scenario() -> dict[str, object]:
+def _stopping_scenario() -> Scenario:
     """Costs far above anything recoverable, so STOP dominates everywhere."""
     horizon = 24
     survival = np.clip(np.cumprod(np.full(horizon, 0.999)), 1e-6, 1.0).astype(np.float64)
@@ -342,22 +336,22 @@ def _stopping_scenario() -> dict[str, object]:
 def test_stopping_rationale_states_actual_rupee_figures() -> None:
     """§23.3 — the rationale must be readable by a merchant and an auditor."""
     scenario = _stopping_scenario()
-    policy = solve(**scenario)  # type: ignore[arg-type]
+    policy = solve(**scenario)
     assert policy.should_stop(2, 0), "scenario failed to produce a stopping state"
 
     rationale = stopping_rationale(
         policy=policy,
         budget_remaining=2,
         last_failure_slot=0,
-        survival=scenario["survival"],  # type: ignore[arg-type]
-        legal=scenario["legal"],  # type: ignore[arg-type]
-        cost=scenario["cost"],  # type: ignore[arg-type]
-        amount_paise=scenario["amount_paise"],  # type: ignore[arg-type]
-        continuation_value_paise=scenario["continuation_value_paise"],  # type: ignore[arg-type]
-        dr=scenario["dr"],  # type: ignore[arg-type]
-        health=scenario["health"],  # type: ignore[arg-type]
-        lead_slots=scenario["lead_slots"],  # type: ignore[arg-type]
-        p_recoverable=scenario["p_recoverable"],  # type: ignore[arg-type]
+        survival=scenario["survival"],
+        legal=scenario["legal"],
+        cost=scenario["cost"],
+        amount_paise=scenario["amount_paise"],
+        continuation_value_paise=scenario["continuation_value_paise"],
+        dr=scenario["dr"],
+        health=scenario["health"],
+        lead_slots=scenario["lead_slots"],
+        p_recoverable=scenario["p_recoverable"],
     )
 
     assert "stopped:" in rationale
@@ -375,7 +369,7 @@ def test_rationale_refuses_a_non_stopping_state() -> None:
     rng = np.random.default_rng(7)
     scenario = _scenario(rng, 20, 2, legal_rate=1.0)
     scenario["cost"] = np.zeros((3, 20), dtype=np.int64)
-    policy = solve(**scenario)  # type: ignore[arg-type]
+    policy = solve(**scenario)
     assert not policy.should_stop(2, 0)
 
     with pytest.raises(ValueError, match="not a stopping state"):
@@ -383,15 +377,15 @@ def test_rationale_refuses_a_non_stopping_state() -> None:
             policy=policy,
             budget_remaining=2,
             last_failure_slot=0,
-            survival=scenario["survival"],  # type: ignore[arg-type]
-            legal=scenario["legal"],  # type: ignore[arg-type]
-            cost=scenario["cost"],  # type: ignore[arg-type]
-            amount_paise=scenario["amount_paise"],  # type: ignore[arg-type]
-            continuation_value_paise=scenario["continuation_value_paise"],  # type: ignore[arg-type]
-            dr=scenario["dr"],  # type: ignore[arg-type]
-            health=scenario["health"],  # type: ignore[arg-type]
-            lead_slots=scenario["lead_slots"],  # type: ignore[arg-type]
-            p_recoverable=scenario["p_recoverable"],  # type: ignore[arg-type]
+            survival=scenario["survival"],
+            legal=scenario["legal"],
+            cost=scenario["cost"],
+            amount_paise=scenario["amount_paise"],
+            continuation_value_paise=scenario["continuation_value_paise"],
+            dr=scenario["dr"],
+            health=scenario["health"],
+            lead_slots=scenario["lead_slots"],
+            p_recoverable=scenario["p_recoverable"],
         )
 
 
@@ -399,7 +393,7 @@ def test_zero_budget_layer_is_all_stop() -> None:
     """`V(0, ·) = 0` and no action — the recursion's base case."""
     rng = np.random.default_rng(3)
     scenario = _scenario(rng, 15, 2)
-    policy: Policy = solve(**scenario)  # type: ignore[arg-type]
+    policy: Policy = solve(**scenario)
 
     assert np.all(policy.value[0] == 0.0)
     assert np.all(policy.action[0] == STOP)

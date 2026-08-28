@@ -15,10 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from prayas.db.tenancy import system_transaction
 from prayas.gate.shadow import (
     ShadowReport,
-    baseline_attempts,
     evaluate_baseline_policy,
     hour_ist,
 )
+from prayas.policy.baseline import baseline_attempts
 from tests.conftest import requires_db
 
 pytestmark = [pytest.mark.db, requires_db]

@@ -36,7 +36,7 @@ from prayas.sequencer.economics import (
     revocation_delta,
 )
 from prayas.sim.config import SimConfig
-from prayas.sim.generate import generate
+from prayas.sim.generate import SimulatedCycle, generate
 
 SEED = 20260829
 CYCLES = 4000
@@ -45,16 +45,16 @@ CONTROL_PCT = 0.15
 
 
 @pytest.fixture(scope="module")
-def population() -> list:
+def population() -> list[SimulatedCycle]:
     return generate(SimConfig(), seed=SEED, tenant_id="t_p8diag", cycles=CYCLES)
 
 
 @pytest.fixture(scope="module")
-def eligible(population: list) -> list:
+def eligible(population: list[SimulatedCycle]) -> list[SimulatedCycle]:
     return harness.recovery_population(population)
 
 
-def _run(eligible: list, hazards: np.ndarray) -> harness.RunResult:
+def _run(eligible: list[SimulatedCycle], hazards: np.ndarray) -> harness.RunResult:
     split = int(len(eligible) * 0.3)
     return harness.RunResult(
         seed=ASSIGN_SEED,
@@ -74,7 +74,9 @@ def _run(eligible: list, hazards: np.ndarray) -> harness.RunResult:
 # ── the three fixed bugs, pinned so they cannot return ──────────────────────
 
 
-def test_only_failed_cycles_enter_the_recovery_population(population: list, eligible: list) -> None:
+def test_only_failed_cycles_enter_the_recovery_population(
+    population: list[SimulatedCycle], eligible: list[SimulatedCycle]
+) -> None:
     """A cycle whose first debit succeeded has nothing to recover."""
     assert 0 < len(eligible) < len(population), "population filter is a no-op"
     assert all(harness.initial_debit_failed(c) for c in eligible)
@@ -83,7 +85,7 @@ def test_only_failed_cycles_enter_the_recovery_population(population: list, elig
     )
 
 
-def test_the_hazard_curve_now_has_usable_structure(eligible: list) -> None:
+def test_the_hazard_curve_now_has_usable_structure(eligible: list[SimulatedCycle]) -> None:
     """Funding is dispersed within the day, so `h(t)` is no longer a comb.
 
     Before the fix, 5 of 143 legal slots carried mass and `S(t)` was flat
@@ -108,7 +110,7 @@ def test_the_attempt_budget_is_three_retries_not_four() -> None:
 # ── the finding that survives all three fixes ───────────────────────────────
 
 
-def test_an_uninformative_prior_produces_the_same_lift(eligible: list) -> None:
+def test_an_uninformative_prior_produces_the_same_lift(eligible: list[SimulatedCycle]) -> None:
     """The decisive diagnostic, with every known bug fixed.
 
     The hazard curve now has real structure, the population is correct, and the
@@ -170,7 +172,7 @@ def test_the_dp_itself_is_not_degenerate() -> None:
     )
 
 
-def test_the_measured_lift_is_attempt_economy_not_timing(eligible: list) -> None:
+def test_the_measured_lift_is_attempt_economy_not_timing(eligible: list[SimulatedCycle]) -> None:
     """What the number actually demonstrates.
 
     Treatment spends far fewer attempts per recovery than control, clearing
@@ -187,7 +189,7 @@ def test_the_measured_lift_is_attempt_economy_not_timing(eligible: list) -> None
     assert treatment.recovery_rate > control.recovery_rate
 
 
-def test_treatment_fires_nothing_the_gate_would_deny(eligible: list) -> None:
+def test_treatment_fires_nothing_the_gate_would_deny(eligible: list[SimulatedCycle]) -> None:
     """Zero compliance violations in treatment — a Phase 8 exit criterion.
 
     Every slot the sequencer proposes clears the execution window, the 24-hour

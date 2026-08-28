@@ -13,6 +13,7 @@ difference is real rather than assumed.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import numpy as np
@@ -27,13 +28,14 @@ from prayas.sequencer.economics import (
     revocation_delta,
 )
 from prayas.sequencer.windows import DEFAULT_HORIZON_SLOTS, build_mask
+from tests.dp_scenario import Scenario
 
 BUDGET = 4
 HORIZON = DEFAULT_HORIZON_SLOTS  # 720
 SOLVE_BUDGET_MS = 15.0
 
 
-def _realistic_inputs() -> dict[str, object]:
+def _realistic_inputs() -> Scenario:
     """A full-size instance built from the real mask and cost model."""
     decided_at = datetime(2026, 3, 2, 8, 0, tzinfo=UTC)
     mask = build_mask(
@@ -63,12 +65,12 @@ def _realistic_inputs() -> dict[str, object]:
     }
 
 
-def _time_ms(fn: object, inputs: dict[str, object], repeats: int = 7) -> float:
+def _time_ms(fn: Callable[..., object], inputs: Scenario, repeats: int = 7) -> float:
     """Best-of-N wall time. Best, not mean: scheduler noise only ever inflates."""
     best = float("inf")
     for _ in range(repeats):
         start = time.perf_counter()
-        fn(**inputs)  # type: ignore[operator]
+        fn(**inputs)
         best = min(best, (time.perf_counter() - start) * 1000.0)
     return best
 
@@ -76,7 +78,7 @@ def _time_ms(fn: object, inputs: dict[str, object], repeats: int = 7) -> float:
 def test_solve_meets_the_15ms_budget_at_b4_h720() -> None:
     """The exit criterion, measured at Appendix C's configured size."""
     inputs = _realistic_inputs()
-    solve(**inputs)  # type: ignore[arg-type]  # warm numpy up first
+    solve(**inputs)  # warm numpy up first
 
     elapsed = _time_ms(solve, inputs)
     assert elapsed < SOLVE_BUDGET_MS, (
@@ -87,12 +89,12 @@ def test_solve_meets_the_15ms_budget_at_b4_h720() -> None:
 def test_the_scenario_is_not_trivially_small() -> None:
     """Guards the benchmark: an over-restrictive mask would make it meaningless."""
     inputs = _realistic_inputs()
-    legal = inputs["legal"]
-    assert legal.sum() > 200, (  # type: ignore[union-attr]
-        f"only {legal.sum()} legal slots — benchmark would not exercise the DP"  # type: ignore[union-attr]
+    legal_slots = int(inputs["legal"].sum())
+    assert legal_slots > 200, (
+        f"only {legal_slots} legal slots — benchmark would not exercise the DP"
     )
 
-    policy = solve(**inputs)  # type: ignore[arg-type]
+    policy = solve(**inputs)
     assert not policy.should_stop(BUDGET, 0), "benchmark scenario stops immediately"
 
 
