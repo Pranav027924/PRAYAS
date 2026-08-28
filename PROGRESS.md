@@ -1,7 +1,7 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 8 — FIRST DEFENSIBLE NUMBER
+Phase 10 — Retention subsystem (not started)
 
 ## Phase status
 | # | Phase | Status | Closed on |
@@ -14,11 +14,42 @@ Phase 8 — FIRST DEFENSIBLE NUMBER
 | 5 | Sequencer | CLOSED | 2026-08-27 |
 | 6 | Executor | CLOSED | 2026-08-27 |
 | 7 | Measurement plane | CLOSED | 2026-08-29 |
-| 8 | FIRST DEFENSIBLE NUMBER | IN PROGRESS | — |
-| 9–19 | see Execution Playbook | not started | — |
+| 8 | FIRST DEFENSIBLE NUMBER | CLOSED (with finding) | 2026-08-29 |
+| 9 | Notification optimizer | CLOSED | 2026-08-29 |
+| 10 | Retention subsystem | not started | — |
+| 11–19 | see Execution Playbook | not started | — |
 
-## Exit criteria — current phase (Phase 8 — FIRST DEFENSIBLE NUMBER)
-_Evidence from a run on 2026-08-29. **Four of six met; one partially met; see FINDING-P8-01.**_
+## Exit criteria — current phase
+_Phase 9 closed. Phase 10 not yet started._
+
+## Closed phases
+
+### Phase 9 — Notification optimizer · closed 2026-08-29
+
+- [x] **PDN never scheduled inside the cutoff** — swept across every debit hour and minute (24 x 3 x 3 funding scenarios); no planned send falls inside the 23:50 IST blackout. Boundary asserted at 23:49 vs 23:50 (§40.2's cliff), and separately that a send after the cutoff *is* lawful for a debit three days out
+- [x] **Every notification passes the gate before sending** — the assembled context is asserted to carry every field §30.1's four notification rules reference (cutoff, contact window, DLT template/header/DND, DPDP consent, fatigue cap). A withdrawn consent is visible as `consent_withdrawn=True` rather than silently absent; a DND registration moves the channel off SMS rather than proposing a send the gate must refuse
+- [x] **Prevention rate computed separately from recovery, compared against control** — the two are **disjoint by construction**: `CycleAccounting` raises if a cycle is marked both, and if a first-execution success claims consumed retries. Measured on high-risk cycles only, so the metric cannot rise by enrolling easier customers
+- [x] **Fatigue cap enforced** — at the cap the send is suppressed *with a stated reason* (§24.6: the ledger entry for a back-off matters as much as one for a debit); one below the cap still sends. Fatigue also degrades response rather than only blocking, per §38's `fatigue_decay`
+
+**§24.2's central claim, measured:** a notice sent as late as legally permitted prevented **2.81%** of cycles against **0.19%** for a fixed 72-hour notice — a **14x** difference, on the simulator's published response model (ADR-059). "A notice sent 72 hours early is forgotten" reproduces.
+
+- **Build list closed against the plan.** Re-checked item by item, not only against the exit criteria. Found and fixed a real gap: §24.2's "content (RBI-required fields...)" and §16's obligations table — "≥24h before every debit, **with opt-out**" — were unimplemented. `Content` now refuses to construct without an opt-out or a mandate reference, since building one would be planning an action the gate must deny. The opt-out is present at every risk level; only the one-tap pay-now link is conditional
+- Gates: 727 tests, coverage 86.17% (floor 85), `mypy --strict prayas tests` clean (113 files), ruff + ruff format clean, pip-audit clean, full `scripts/ci-local.sh` green
+
+**Closure decision, judged against the plan.** All four exit criteria are met and
+every build-list item is implemented. FINDING-P9-01 does **not** block closure:
+Phase 9's artifact is "a prevention number — a metric no competitor reports,
+*because none noticed the compliance requirement was also the best channel*",
+and that claim is precisely what was measured (2.81% vs 0.19%, 14x). §24.2's
+own mechanism claim — "the gap between those two outcomes is free" — reproduces
+exactly. §24.2 lists **three** timing inputs (as late as legally permitted,
+attention pattern, eve of predicted funding); all three are implemented, and
+the finding records which one carries the effect in *this* simulator. What
+FINDING-P9-01 bears on is §2's liquidity thesis, which is not a Phase 9
+criterion — it is the same thread as FINDING-P8-01, and both are carried.
+
+### Phase 8 — FIRST DEFENSIBLE NUMBER · closed 2026-08-29 (with finding carried)
+_Four of six criteria met, one partially met, one finding carried to Phase 10._
 
 - [x] **10,000+ simulated cycles through the complete loop** — 12,000 generated, **7,019** entering the recovery population after excluding cycles whose first debit succeeded
 - [~] **Incremental recovery reported with CI, CUPED-adjusted** — CI **yes**: `+41.0 pp [+37.6, +44.5]`, SRM χ²=0.03 p=0.870 PASS. **CUPED not applied**: the simulator generates exactly one cycle per customer (1:1), so ADR-049's per-customer pre-period does not exist. Reported rather than faked with a substitute covariate
@@ -30,8 +61,6 @@ _Evidence from a run on 2026-08-29. **Four of six met; one partially met; see FI
 **The number, and what it means.** `+41.0 pp` incremental recovery, 1.51 attempts per recovery versus 8.40, zero gate breaches, every decision replayable. **The lift is real and robust but is NOT attributable to liquidity forecasting** — replacing the fitted hazard with an uninformative prior reproduces it exactly in 9/9 perturbations. What it demonstrates is attempt economy under a hard regulatory budget. See FINDING-P8-01.
 
 - Gates: 696 tests, coverage 85.89% (floor 85), mypy --strict clean (62 files), ruff + ruff format clean
-
-## Closed phases
 
 ### Phase 7 — Measurement plane · closed 2026-08-29
 
@@ -406,7 +435,23 @@ Each leaves Python to auto-inject the real builtins module. They survived becaus
 **Rationale:** If the audit's baseline and the control arm ever diverge, the published claim that "the default retry behaviour produces N violations per 10,000 cycles" would describe a policy the experiment never ran, and the two numbers become quietly incomparable. Importing Phase 2's shadow harness directly would guarantee they match but couple the measurement plane to the gate's audit tooling, so a change made for the report silently alters the control arm. One definition both cite keeps the coupling explicit.
 
 ### FINDING-P8-01 · 2026-08-29 · The lift does not come from the liquidity model
-**Status:** OPEN — three bugs found and fixed; the finding survives all three.
+**Status:** CARRIED TO PHASE 10 — three bugs found and fixed; the finding survives all three.
+
+**Where the fix lands.** The root cause is that §23.1's objective charges for
+attempts but never for delay. Phase 10 builds §22's revocation hazard and
+"**upgrades the sequencer to the LTV objective — replace the Phase 5
+placeholder**", which is exactly where a *time-dependent* `Δr` arrives:
+revocation risk grows while a mandate sits unpaid, which is the missing cost of
+waiting. ADR-037 deferred that deliberately (a constant `Δr` matched the
+simulator), and ADR-040 deferred the STOP-baseline fix to the same phase. Phase
+10's own exit criterion — "LTV sequencer is measurably more conservative than
+the recovery-only version" — is the test that would detect the fix working.
+
+**This does not block Phase 9.** The Playbook's warning is about a *missing*
+lift ("if the lift is not there, stop"). The lift is present and survives 9/9
+perturbations; the loop runs end to end. What is narrower than hoped is the
+*claim*, not the machinery. Phase 9 optimises the notification channel, which
+is independent of the sequencer's slot choice.
 
 **Bugs found and fixed while establishing this** (each was real, each changed the numbers):
 1. **Recovery population included cycles that never failed.** ~40% of generated cycles succeed on the first debit and are not recovery opportunities; both arms were being scored on free wins. Fixed by `recovery_population()`, selecting on the *observable* failure event, never on `true_cause`.
@@ -491,6 +536,60 @@ claim alone and drop the liquidity claim from Phase 8's sentence.
 **Options:** sub-daily dispersion; leave whole-day funding; model absolute IST clock hours.
 **Rationale:** Whole-day funding made `h(t)` a comb (5 of 143 legal slots with mass), so `S(t)` was flat between spikes and `p(t'|t)` could not separate adjacent slots — the sequencer had nothing to act on. Real money does not arrive at midnight sharp. Bounding under 24h keeps `delta.days` unchanged, so §21's day-level properties and Phase 4's closed tests are untouched. Absolute IST clock hours were rejected: setting an absolute hour can move funding across the day boundary relative to `due_at`, which would have changed Phase 4's `h(0) > 0.5` artifact.
 **Measured consequence:** 82 of 143 legal slots now carry mass — and the lift is *still* identical to an uninformative prior, which is what isolates the cause to the objective rather than the curve.
+
+### FINDING-P9-01 · 2026-08-29 · PDN timing reduces to "as late as legally permitted"
+**Status:** OPEN — the same structural pattern as FINDING-P8-01, in a second subsystem.
+
+**What was measured.** Four notification policies over 1,923 scored cycles:
+
+| policy | prevented |
+|---|---|
+| per-customer funding model | 2.81% |
+| population constant | 2.81% |
+| **no model at all** (as late as legally permitted) | **2.81%** |
+| naive 72-hour notice | 0.19% |
+
+The entire gain comes from *recency to the debit*. The liquidity model contributes **+0.00%**.
+
+**Why.** Predicted funding lands **after** the debit (learned offset: due+5h), while
+the notice must precede the debit by 24 hours. So "closest to predicted funding"
+resolves to "latest legal send" for every prediction, however accurate — the
+argmin is identical. §24.2's "eve of a salary credit" mechanism can only bite
+when funding is predicted to land *between* the earliest legal send and the
+debit, and the simulator's funding never precedes the due date.
+
+**This is FINDING-P8-01's sibling.** There the 24-hour notice lead stranded the
+liquidity signal from the *retry*; here it strands the same signal from the
+*notice*. In both cases the model provably cannot change the answer, and in both
+the real effect is a different mechanism (attempt economy there, recency here).
+
+**Two real fixes were made while establishing this**, both pinned by tests:
+1. **Archetypes were drawn per cycle, not per customer.** ADR-058 made customers
+   recur, but a person could be salaried on one cycle and chronically-dry on the
+   next — so per-customer prediction measured **20% *worse*** than a population
+   constant. With archetypes stable per customer it is now **53% better** (MAE
+   40.2h vs 85.9h). ADR-058 was half-implemented until this.
+2. Using `true_funding_time` as the "prediction" in the first comparison was
+   leakage; replaced with a hazard fitted on a training split.
+
+**What would make the model matter:** funding that can land *before* the due date,
+so there is an eve to aim at. That is a §38 modelling question, not a planner bug.
+
+### ADR-057 · 2026-08-29 · PDN joins the treatment arm
+**Decision:** PDN timing becomes part of the treatment. ADR-052's "identical across arms" applied to Phase 8 only.
+**Options:** PDN joins treatment; hold it identical and measure prevention observationally; three arms.
+**Rationale:** §24.2's "highest-leverage channel" cannot be optimised while held constant, and the PDN is the one action that fires *before* the 24-hour notice lead — the exact window where FINDING-P8-01 showed the liquidity model's information is stranded. Three arms would isolate the sequencer's contribution from the notification's, but ADR-047's hand-rolled statistics rest on every comparison being two-arm and needing only χ² with **one** degree of freedom (`erfc(sqrt(x/2))`, exact); a third arm needs 2 df and would reopen the dependency question.
+**Consequence, stated:** Phase 8's +41.0 pp and Phase 9's number measure **different treatments** and are not comparable. Every artifact must name which arm produced which.
+
+### ADR-058 · 2026-08-29 · Customers recur across mandates
+**Decision:** Draw `customer_id` from a pool so each customer holds several mandates, controlled by `SimConfig.cycles_per_customer`.
+**Options:** repeat customers; population-level attention prior; skip attention alignment.
+**Rationale:** A *recurring*-debit simulator in which no customer recurs is a modelling defect in its own right. §33 already models the reality explicitly — "one customer may hold mandates with several merchants" — so drawing customers from a pool is the spec's own picture rather than an invention. Unblocks three things at once: §24.2's attention alignment, ADR-049's CUPED pre-period (Phase 7's one partially-met criterion), and Phase 12's memory subsystem, which has nothing to remember without repeat customers. Mandate and cycle stay 1:1, so no schema or loader change is needed.
+
+### ADR-059 · 2026-08-29 · PDN response is timing-dependent
+**Decision:** The simulator models a notification response whose strength depends on **when** the notice lands. Published as `SimConfig` parameters and swept by the robustness suite.
+**Options:** timing-dependent response; fixed uplift regardless of timing; do not model it.
+**Rationale:** §24.2 states the mechanism directly — "A notice sent 72 hours early is forgotten. One sent at the 24-hour boundary, the evening before a salary credit lands, is acted on." A fixed uplift would make timing irrelevant *by construction*, reproducing FINDING-P8-01 exactly: a real number attached to a false mechanism claim. Not modelling it at all would make the prevention rate structurally zero and leave Phase 9's artifact without its artifact. Making the effect size a published, swept parameter means the result cannot rest on a flattering constant — if optimised timing fails to beat naive timing under it, that is a real negative result.
 
 ## Spec errata found (documentation only, no code impact)
 - §18 cites "§34.4" for isolation-as-correctness; §34 is *Estimators* and has no subsections. Correct target is **§40.4**.

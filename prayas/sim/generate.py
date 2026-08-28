@@ -143,6 +143,29 @@ def _emit_code(cause: str, masked: bool) -> str:
     return CAUSE_CODES.get(cause, DO_NOT_HONOR)
 
 
+def _choose_stable(key: str, mix: dict[str, float]) -> str:
+    """Pick from a mixture deterministically in `key`, not from the RNG stream.
+
+    ADR-058 made customers recur, but a payday archetype is a property of the
+    *person*: someone salaried on the 1st is salaried on the 1st next month
+    too. Drawing it per cycle left each customer's history uninformative about
+    their own future — per-customer prediction measured 20% *worse* than a
+    population constant, because there was nothing consistent to learn.
+
+    Keyed on the customer rather than sampled so every cycle that customer
+    holds resolves to the same archetype, without consuming RNG draws that
+    would shift the per-cycle streams (ADR-029).
+    """
+    digest = hashlib.sha256(f"archetype:{key}".encode()).digest()
+    roll = int.from_bytes(digest[:8], "big") / float(1 << 64)
+    cumulative = 0.0
+    for name, weight in sorted(mix.items()):
+        cumulative += weight
+        if roll < cumulative:
+            return name
+    return sorted(mix)[-1]
+
+
 def _choose(rng: np.random.Generator, mix: dict[str, float]) -> str:
     keys = sorted(mix)  # sorted so the mapping from draw to key is stable
     weights = np.array([mix[k] for k in keys], dtype=float)
@@ -157,10 +180,15 @@ def generate_cycle(
     index: int,
 ) -> SimulatedCycle:
     """One cycle with its full observable stream and its ground truth."""
-    archetype = _choose(rng, config.payday_mix)
+    customer_index = index // max(config.cycles_per_customer, 1)
+    customer_id = f"cust_{customer_index:07d}"
+
+    # Stable per customer (ADR-058): the person's payday pattern, not the
+    # cycle's. Rail stays per-mandate, which is correct — one customer may hold
+    # a UPI mandate with one merchant and a card mandate with another.
+    archetype = _choose_stable(customer_id, config.payday_mix)
     rail = _choose(rng, config.rail_mix)
 
-    customer_id = f"cust_{index:07d}"
     mandate_id = f"sub_{index:07d}"
     cycle_id = f"inv_{index:07d}"
 

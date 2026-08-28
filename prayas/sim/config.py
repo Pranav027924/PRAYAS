@@ -124,6 +124,21 @@ class SimConfig:
     #: Baseline probability a debit fails for a reason unrelated to funding.
     base_failure_rate: float = 0.18
 
+    #: ADR-058 — mandates a single customer holds. A *recurring*-debit
+    #: simulator in which no customer recurs cannot express §24.2's attention
+    #: patterns, ADR-049's CUPED pre-period, or §12's memory at all. §33 already
+    #: models this: "one customer may hold mandates with several merchants".
+    cycles_per_customer: int = 4
+
+    #: ADR-059 — P(customer tops up in time) for a perfectly-timed notice.
+    #: §24.2: "One sent at the 24-hour boundary, the evening before a salary
+    #: credit lands, is acted on."
+    pdn_uplift_max: float = 0.35
+
+    #: How fast that effect decays as the notice moves away from the eve of
+    #: predicted funding. §24.2: "A notice sent 72 hours early is forgotten."
+    pdn_attention_decay_hours: float = 18.0
+
     def __post_init__(self) -> None:
         _check_mix("payday_mix", self.payday_mix, PAYDAY_ARCHETYPES)
         _check_mix("rail_mix", self.rail_mix, RAILS)
@@ -140,6 +155,12 @@ class SimConfig:
             raise ConfigError("revocation_beta must be non-negative")
         if not 0.0 <= self.base_failure_rate <= 1.0:
             raise ConfigError("base_failure_rate must be a probability")
+        if self.cycles_per_customer < 1:
+            raise ConfigError("cycles_per_customer must be at least 1")
+        if not 0.0 <= self.pdn_uplift_max <= 1.0:
+            raise ConfigError("pdn_uplift_max must be a probability")
+        if self.pdn_attention_decay_hours <= 0:
+            raise ConfigError("pdn_attention_decay_hours must be positive")
         if self.horizon_days <= 0:
             raise ConfigError("horizon_days must be positive")
 
