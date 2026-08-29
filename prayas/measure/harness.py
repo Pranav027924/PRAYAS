@@ -24,6 +24,7 @@ on the cycles it is measured over.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Final
@@ -33,8 +34,11 @@ from numpy.typing import NDArray
 
 from prayas.domain.rails import IST, UpiAutopayAdapter
 from prayas.inference.cause import infer, is_terminal
+from prayas.inference.hazard import leaky_survival
+from prayas.inference.nowcast import IssuerNowcast
 from prayas.measure.assignment import CONTROL, TREATMENT, arm, propensity
 from prayas.policy.baseline import BASELINE_RETRY_DAYS
+from prayas.retention.revocation import RevocationFeatures, RevocationModel
 from prayas.sequencer.dp import solve
 from prayas.sequencer.economics import (
     attempt_cost_matrix,
@@ -152,7 +156,7 @@ def recovery_population(cycles: list[SimulatedCycle]) -> list[SimulatedCycle]:
     return [c for c in cycles if initial_debit_failed(c)]
 
 
-def funding_slot(cycle: SimulatedCycle) -> int | None:
+def funding_slot(cycle: SimulatedCycle, horizon: int = HORIZON_SLOTS) -> int | None:
     """The slot at which the account genuinely held money, or None.
 
     Ground truth. Read here only to *score* an attempt after the fact — never
@@ -162,7 +166,36 @@ def funding_slot(cycle: SimulatedCycle) -> int | None:
         return None
     delta = cycle.truth.true_funding_time - cycle.due_at
     hours = int(delta.total_seconds() // 3600)
-    return hours if 0 <= hours < HORIZON_SLOTS else None
+    return hours if 0 <= hours < horizon else None
+
+
+def funds_present(cycle: SimulatedCycle, horizon: int = HORIZON_SLOTS) -> NDArray[np.bool_]:
+    """Whether the account actually held money in each hourly slot (ADR-073).
+
+    Ground truth, read only to *score* an attempt after the fact — never passed
+    to a policy (ADR-030).
+
+    Under the default absorbing dynamics this is `slot >= funding_slot`, exactly
+    what `run_arm` checked before, so every closed phase's numbers are
+    unchanged. Under `non_absorbing` the windows are bounded and an attempt can
+    arrive after the money has gone — which is the only condition under which
+    *when* you retry can matter at all.
+    """
+    present = np.zeros(horizon, dtype=np.bool_)
+    windows = cycle.truth.funding_windows
+    if not windows:
+        slot = funding_slot(cycle, horizon)
+        if slot is not None:
+            present[slot:] = True
+        return present
+
+    for start, end in windows:
+        first = int((start - cycle.due_at).total_seconds() // 3600)
+        last = int(np.ceil((end - cycle.due_at).total_seconds() / 3600))
+        lo, hi = max(first, 0), min(last, horizon)
+        if hi > lo:
+            present[lo:hi] = True
+    return present
 
 
 def empirical_hazards(cycles: list[SimulatedCycle], horizon: int = HORIZON_SLOTS) -> FloatArray:
@@ -189,9 +222,13 @@ def empirical_hazards(cycles: list[SimulatedCycle], horizon: int = HORIZON_SLOTS
     return np.clip(hazards, 1e-6, 1.0 - 1e-6)
 
 
-def survival_from(hazards: FloatArray) -> FloatArray:
-    """S(t) = prod (1 - h(i)) for i <= t."""
-    return np.clip(np.cumprod(1.0 - hazards), 1e-9, 1.0)
+def survival_from(hazards: FloatArray, *, leak_per_day: float = 0.0) -> FloatArray:
+    """S(t) = prod (1 - h(i)) for i <= t, optionally with §21's leak.
+
+    `leak_per_day=0` is the strictly-absorbing curve every closed phase was
+    measured under.
+    """
+    return np.clip(leaky_survival(hazards, leak_per_day=leak_per_day), 1e-9, 1.0)
 
 
 def legal_mask(
@@ -249,6 +286,10 @@ def treatment_slots(
     p_recoverable: float,
     horizon: int = HORIZON_SLOTS,
     budget: int = ATTEMPT_BUDGET,
+    dr: FloatArray | None = None,
+    health: FloatArray | None = None,
+    leak_per_day: float = 0.0,
+    presence: FloatArray | None = None,
 ) -> tuple[list[int], bool]:
     """Slots the DP chooses, re-solving after each failure.
 
@@ -257,15 +298,16 @@ def treatment_slots(
     Returns the slots and whether the policy stopped early on economic grounds
     (§23.3) rather than exhausting the budget.
     """
-    survival = survival_from(hazards)
+    survival = None if presence is not None else survival_from(hazards, leak_per_day=leak_per_day)
     policy = solve(
         survival=survival,
+        presence=presence,
         legal=legal,
         cost=attempt_cost_matrix(amount_paise=amount_paise, budget=budget, horizon_slots=horizon),
         amount_paise=amount_paise,
         continuation_value_paise=continuation_value_paise(amount_paise),
-        dr=revocation_delta(horizon),
-        health=health_multiplier(horizon),
+        dr=revocation_delta(horizon) if dr is None else dr,
+        health=health_multiplier(horizon) if health is None else health,
         budget=budget,
         lead_slots=PDN_LEAD_HOURS,
         p_recoverable=p_recoverable,
@@ -303,17 +345,34 @@ def run_arm(
     *,
     hazards: FloatArray,
     control_pct: float,
+    dr: FloatArray | None = None,
+    health: FloatArray | None = None,
+    leak_per_day: float = 0.0,
+    presence: FloatArray | None = None,
 ) -> CycleResult:
-    """Run one cycle under its arm, scoring against ground truth."""
+    """Run one cycle under its arm, scoring against ground truth.
+
+    `hazards` is this cycle's curve. Phase 8 passed the same population curve
+    for every cycle; a per-customer model passes a different one each time
+    (ADR-071). Nothing else about the loop changes, which is the point: the two
+    arms differ only in the numbers the sequencer is given.
+    """
     legal = legal_mask(cycle.due_at)
-    funded_at = funding_slot(cycle)
+    present = funds_present(cycle)
     p_recoverable = _recoverable_probability(cycle)
 
     if assigned == CONTROL:
         slots, stopped = control_slots(cycle.due_at), False
     else:
         slots, stopped = treatment_slots(
-            hazards, legal, amount_paise=cycle.amount_paise, p_recoverable=p_recoverable
+            hazards,
+            legal,
+            amount_paise=cycle.amount_paise,
+            p_recoverable=p_recoverable,
+            dr=dr,
+            health=health,
+            leak_per_day=leak_per_day,
+            presence=presence,
         )
 
     fired = denials = 0
@@ -327,8 +386,8 @@ def run_arm(
             continue
         fired += 1
         fired_slots.append(slot)
-        # Ground truth decides: money was there, or it was not.
-        if funded_at is not None and slot >= funded_at:
+        # Ground truth decides: money was there *at that moment*, or it was not.
+        if present[slot]:
             recovered = True
             break
 
@@ -347,12 +406,115 @@ def run_arm(
     )
 
 
+#: An economics provider: given the **full population**, return a function from
+#: cycle to that cycle's `(Δr, health)` arrays. ADR-072 — the second seam,
+#: alongside `HazardProvider`. Both default to the flat constants, so a caller
+#: that passes neither gets Phase 8's behaviour exactly.
+#:
+#: **The full population, not the training split, and that is not leakage.**
+#: `Δr` is not fitted here; it is *evaluated* on §22's features, and those
+#: features are a customer's observable history. Handing this the failed-cycle
+#: training split instead means a customer's successful cycles are invisible —
+#: `successful_cycles` is then zero for every cycle in the run, `Δr` collapses
+#: back to one array shared by everybody, and the per-customer signal the whole
+#: exercise depends on is silently absent. `revocation_features` filters to
+#: `due_at <` the cycle in hand, so nothing from the future is readable.
+EconomicsProvider = Callable[
+    [list[SimulatedCycle]], Callable[[SimulatedCycle], tuple[FloatArray, FloatArray]]
+]
+
+
+def flat_economics(
+    train: list[SimulatedCycle],
+) -> Callable[[SimulatedCycle], tuple[FloatArray, FloatArray]]:
+    """ADR-037 and ADR-039's constants — the pre-Phase-11 behaviour."""
+    dr = revocation_delta(HORIZON_SLOTS)
+    health = health_multiplier(HORIZON_SLOTS)
+    del train
+    return lambda _cycle: (dr, health)
+
+
+def revocation_features(cycle: SimulatedCycle, prior: list[SimulatedCycle]) -> RevocationFeatures:
+    """§22's features for a cycle, from that customer's earlier cycles only.
+
+    The cycle in hand has just failed, so it contributes one consecutive
+    failure; everything else is history.
+    """
+    settled = [c for c in prior if _has_event(c, "payment.captured")]
+    consecutive = 1
+    for earlier in reversed(prior):
+        if _has_event(earlier, "payment.captured"):
+            break
+        consecutive += 1
+
+    last_success = max((c.due_at for c in settled), default=None)
+    days_unpaid = (cycle.due_at - last_success).total_seconds() / 86400.0 if last_success else 60.0
+    return RevocationFeatures(
+        consecutive_failures=consecutive,
+        days_since_success=max(days_unpaid, 0.0),
+        successful_cycles=len(settled),
+        rail=cycle.rail,
+    )
+
+
+def _has_event(cycle: SimulatedCycle, event: str) -> bool:
+    return any(e.get("body", {}).get("event") == event for e in cycle.observables)
+
+
+def fitted_economics(
+    model: RevocationModel, nowcast: IssuerNowcast | None = None
+) -> EconomicsProvider:
+    """ADR-072: §22's fitted `Δr(t)` and §20's issuer health, per cycle."""
+
+    def provider(
+        train: list[SimulatedCycle],
+    ) -> Callable[[SimulatedCycle], tuple[FloatArray, FloatArray]]:
+        history: dict[str, list[SimulatedCycle]] = {}
+        for cycle in train:
+            history.setdefault(cycle.customer_id, []).append(cycle)
+        for owned in history.values():
+            owned.sort(key=lambda c: c.due_at)
+
+        def economics_for(cycle: SimulatedCycle) -> tuple[FloatArray, FloatArray]:
+            prior = [c for c in history.get(cycle.customer_id, []) if c.due_at < cycle.due_at]
+            dr = revocation_delta(
+                HORIZON_SLOTS, model=model, features=revocation_features(cycle, prior)
+            )
+            health = health_multiplier(
+                HORIZON_SLOTS, nowcast=nowcast, issuer=cycle.issuer, at=cycle.due_at
+            )
+            return dr, health
+
+        return economics_for
+
+    return provider
+
+
+#: A hazard provider: given the training split, return a function from cycle to
+#: that cycle's hourly hazard curve. ADR-071 — the seam that lets a per-customer
+#: model be measured through exactly the same loop as the population curve, so a
+#: difference in lift is a difference in the model and not in the harness.
+HazardProvider = Callable[[list[SimulatedCycle]], Callable[[SimulatedCycle], FloatArray]]
+
+
+def population_hazard_provider(
+    train: list[SimulatedCycle],
+) -> Callable[[SimulatedCycle], FloatArray]:
+    """Phase 8's behaviour: one empirical curve, shared by every cycle."""
+    hazards = empirical_hazards(train)
+    return lambda _cycle: hazards
+
+
 def run_batch(
     population: list[SimulatedCycle],
     *,
     seed: str,
     control_pct: float,
     train_fraction: float = 0.3,
+    hazard_provider: HazardProvider = population_hazard_provider,
+    economics_provider: EconomicsProvider = flat_economics,
+    leak_per_day: float = 0.0,
+    presence_provider: HazardProvider | None = None,
 ) -> RunResult:
     """Run the full loop over a population, both arms.
 
@@ -372,17 +534,27 @@ def run_batch(
     if not train or not evaluate:
         raise ValueError("recovery population too small to split into train and evaluation")
 
-    hazards = empirical_hazards(train)
+    curve_for = hazard_provider(train)
+    economics_for = economics_provider(population)
+    # ADR-075: when a presence provider is given, the DP consumes
+    # `P(funds present at t)` and the survival curve is not used at all.
+    presence_for = presence_provider(train) if presence_provider else None
 
-    results = [
-        run_arm(
-            cycle,
-            arm(cycle.customer_id, seed, control_pct),
-            hazards=hazards,
-            control_pct=control_pct,
+    results = []
+    for cycle in evaluate:
+        dr, health = economics_for(cycle)
+        results.append(
+            run_arm(
+                cycle,
+                arm(cycle.customer_id, seed, control_pct),
+                hazards=curve_for(cycle),
+                control_pct=control_pct,
+                dr=dr,
+                health=health,
+                leak_per_day=leak_per_day,
+                presence=presence_for(cycle) if presence_for else None,
+            )
         )
-        for cycle in evaluate
-    ]
     return RunResult(seed=seed, control_pct=control_pct, cycles=results)
 
 

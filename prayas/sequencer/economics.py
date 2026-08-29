@@ -7,8 +7,10 @@ constant here behind an explicit seam, and each is recorded as an ADR rather
 than buried as a magic number:
 
 * `W`      — mandate continuation value. §22's revocation model is Phase 10.
-* `Δr`     — marginal revocation hazard per attempt. Also Phase 10.
-* `health` — issuer health forecast. §21's nowcast is Phase 11.
+* `Δr`     — marginal revocation hazard per attempt. **Wired in Phase 11**
+             (ADR-072) to §22's fitted model; falls back to ADR-037's constant.
+* `health` — issuer health forecast. **Wired in Phase 11** (ADR-072) to §20's
+             nowcast; falls back to ADR-039's neutral constant.
 
 **Cost is two-dimensional** (`cost[b][t]`), which deviates from §23.2's
 `cost[t]`. The Phase 5 build list requires "convex fraud risk", and convexity
@@ -20,10 +22,14 @@ Money is integer paise everywhere. Every returned cost is an int.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Final
 
 import numpy as np
 from numpy.typing import NDArray
+
+from prayas.inference.nowcast import IssuerNowcast
+from prayas.retention.revocation import RevocationFeatures, RevocationModel
 
 # ── Appendix C coefficients ─────────────────────────────────────────────────
 
@@ -49,8 +55,14 @@ W_MULTIPLE_OF_AMOUNT: Final = 12
 #: **Phase 10 replaces this with §22's hazard.**
 DELTA_R_PER_ATTEMPT: Final = 0.04
 
-#: ADR-039. Neutral until §21's nowcast lands in Phase 11.
+#: ADR-039. The value when the nowcast has no opinion, and the value after a
+#: predicted recovery.
 HEALTH_NEUTRAL: Final = 1.0
+
+#: ADR-072. Success multiplier while an issuer is believed down. Not zero: an
+#: outage raises the failure rate, it does not close the shutter, and a zero
+#: would make the DP treat those slots as unreachable rather than poor.
+OUTAGE_HEALTH: Final = 0.15
 
 #: Flat per-attempt processing cost, paise. UPI carries no MDR, but an attempt
 #: is not free — reconciliation and support load are real.
@@ -73,18 +85,69 @@ def continuation_value_paise(amount_paise: int) -> int:
     return amount_paise * W_MULTIPLE_OF_AMOUNT
 
 
-def revocation_delta(horizon_slots: int) -> FloatArray:
-    """`Δr[t]` — marginal revocation hazard added by an attempt. ADR-037.
+def revocation_delta(
+    horizon_slots: int,
+    *,
+    model: RevocationModel | None = None,
+    features: RevocationFeatures | None = None,
+    hours_per_slot: float = 1.0,
+) -> FloatArray:
+    """`Δr[t]` — marginal revocation hazard from attempting at slot `t`. ADR-072.
 
-    Flat across slots for now. The array shape is §23.2's, so Phase 10 changes
-    the values without touching the DP.
+    With a fitted §22 model this is the risk actually accrued by *waiting* until
+    `t`, which rises with the delay. Without one it falls back to ADR-037's
+    constant, so existing callers are unchanged.
+
+    **The time-dependence is what makes the sequencer's problem non-trivial.**
+    Constant `Δr` plus absorbing funding means waiting costs nothing, and the
+    optimal policy is "attempt at the last legal slot" for every cycle
+    regardless of its liquidity curve — which is exactly what FINDING-P11-01
+    measured, and why a better hazard model changed no decisions at all.
     """
-    return np.full(horizon_slots, DELTA_R_PER_ATTEMPT, dtype=np.float64)
+    if model is None or features is None:
+        return np.full(horizon_slots, DELTA_R_PER_ATTEMPT, dtype=np.float64)
+
+    days = np.arange(horizon_slots, dtype=np.float64) * hours_per_slot / 24.0
+    return np.asarray(
+        [model.marginal_delta(features, days_ahead=float(d)) for d in days],
+        dtype=np.float64,
+    )
 
 
-def health_multiplier(horizon_slots: int) -> FloatArray:
-    """`health[t]` — issuer health forecast. ADR-039: neutral until Phase 11."""
-    return np.full(horizon_slots, HEALTH_NEUTRAL, dtype=np.float64)
+def health_multiplier(
+    horizon_slots: int,
+    *,
+    nowcast: IssuerNowcast | None = None,
+    issuer: str | None = None,
+    at: datetime | None = None,
+    hours_per_slot: float = 1.0,
+    outage_health: float = OUTAGE_HEALTH,
+) -> FloatArray:
+    """`health[t]` — issuer health forecast, ADR-072 (was ADR-039's constant).
+
+    The DP multiplies the success probability by this, so it answers "if the
+    money is there, will the issuer honour the debit at `t`?" — a different
+    question from liquidity, and the one §20 answers with "wait for recovery
+    ETA".
+
+    A degraded issuer suppresses health until its estimated recovery and then
+    returns to neutral. Suppressed rather than zeroed: an outage is a raised
+    failure rate, not a closed shutter, and a zero would make the DP treat those
+    slots as unreachable rather than merely poor.
+
+    Neutral whenever the nowcast has no opinion. Silence must not suppress an
+    attempt any more than it should license one.
+    """
+    if nowcast is None or issuer is None or at is None:
+        return np.full(horizon_slots, HEALTH_NEUTRAL, dtype=np.float64)
+
+    state = nowcast.state(issuer, at)
+    if not state.is_degraded or state.recovery_eta is None:
+        return np.full(horizon_slots, HEALTH_NEUTRAL, dtype=np.float64)
+
+    recovered_after = (state.recovery_eta - at).total_seconds() / 3600.0 / hours_per_slot
+    hours = np.arange(horizon_slots, dtype=np.float64)
+    return np.where(hours < recovered_after, outage_health, HEALTH_NEUTRAL)
 
 
 def attempt_cost_matrix(

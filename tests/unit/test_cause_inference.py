@@ -208,21 +208,19 @@ def test_v0_cannot_separate_the_causes_hiding_behind_05() -> None:
     )
 
 
-def test_masking_does_not_change_overall_accuracy_here() -> None:
-    """A KNOWN SIMULATOR GAP, recorded rather than hidden.
+def test_masking_degrades_v0_accuracy() -> None:
+    """ADR-065 closed the gap this test used to record.
 
-    §20 describes 05 as "30-40% of all declines... roughly half being
-    insufficient funds in disguise". In this simulator the 05 population is
-    ~98% `no_funds`, because `issuer_degraded` deterministically emits 91 and
-    never masquerades as 05. §38 defines `mask_05_rate` only for `no_funds`, so
-    the simulator is faithful to §38 while not reproducing §20's account of the
-    real signal.
+    §20 describes 05 as "30-40% of all declines... the least informative signal
+    in payments". Until ADR-065 the simulator's 05 bucket was ~95% `no_funds`,
+    and V0's default answer for 05 is `no_funds` — so masking moved cycles from
+    51 to 05 and V0 kept getting them right. Accuracy was *flat* in the masking
+    rate, which meant 05 cost the model nothing and Phase 11 would have been
+    measured against a flattering baseline.
 
-    The consequence is measurable and matters: masking moves `no_funds` from 51
-    to 05, and V0's default answer for 05 is already `no_funds`, so overall
-    accuracy is unchanged. V0 therefore looks better on 05 than it would against
-    a realistic mix, and Phase 11 would be measured against a flattering
-    baseline unless this is corrected first.
+    Now that four causes hide behind 05, masking has to hurt. If this test ever
+    goes flat again, the mixture has collapsed back to one component and every
+    cause-inference number above is measuring something easier than §20.
     """
 
     def accuracy(mask_rate: float) -> float:
@@ -238,7 +236,8 @@ def test_masking_does_not_change_overall_accuracy_here() -> None:
         )
         return correct / len(failures)
 
-    assert accuracy(0.0) == pytest.approx(accuracy(1.0), abs=0.005), (
-        "masking now shifts overall accuracy — the simulator's 05 composition "
-        "changed, so this recorded gap needs revisiting"
+    clear, obscured = accuracy(0.0), accuracy(1.0)
+    assert obscured < clear - 0.02, (
+        f"masking costs V0 nothing ({clear:.1%} -> {obscured:.1%}); the 05 bucket "
+        "has collapsed back to a single component and ADR-035 has regressed"
     )

@@ -25,6 +25,7 @@ import numpy as np
 from prayas.sim.config import (
     CHRONICALLY_DRY,
     DO_NOT_HONOR,
+    FRAUD_HOLD,
     GIG_IRREGULAR,
     ISSUER_DEGRADED,
     LIMIT_BREACH,
@@ -49,6 +50,35 @@ CAUSE_CODES: Final[dict[str, str]] = {
 #: without context.
 FRAUD_CODE: Final = DO_NOT_HONOR
 
+#: ADR-067 — the issuer roster. Outages are a property of an *issuer over time*,
+#: shared by every customer banking there. Until now each cycle drew its own
+#: private outage calendar, which meant no two cycles could ever agree that the
+#: issuer was down — so §20's `peer_success_rate` ("other customers, same
+#: issuer, same 5-min window") was uncomputable, and Phase 11's nowcast had no
+#: population-level event to detect.
+#: ADR-069 — spread of per-customer fraud propensity. Wide enough that the
+#: sibling failure rate separates the prone from the ordinary, narrow enough
+#: that no customer is certain to be held.
+_FRAUD_FLOOR: Final = 0.15
+_FRAUD_CEILING: Final = 3.0
+
+#: ADR-069 — the range a customer's debit ceiling is drawn from, integer paise.
+#: Spans the amount range so `amount / limit` covers both comfortable and
+#: breaching debits rather than sitting entirely on one side.
+_LIMIT_FLOOR_PAISE: Final = 100_000
+_LIMIT_CEILING_PAISE: Final = 600_000
+
+ISSUERS: Final[tuple[str, ...]] = (
+    "HDFC",
+    "ICICI",
+    "SBI",
+    "AXIS",
+    "KOTAK",
+    "PNB",
+    "BOB",
+    "IDFC",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class GroundTruth:
@@ -59,6 +89,12 @@ class GroundTruth:
     issuer_state: str
     payday_archetype: str
     masked_as_05: bool
+    #: ADR-073 — half-open [start, end) intervals in which the account actually
+    #: held money. Under the default absorbing dynamics there is exactly one,
+    #: open-ended: money arrives and stays. Under `non_absorbing` each payday
+    #: gives a bounded window, because §21's "money arrives and is spent" is
+    #: only a real limitation if the money can leave again.
+    funding_windows: tuple[tuple[datetime, datetime], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +106,10 @@ class SimulatedCycle:
     customer_id: str
     cycle_id: str
     rail: str
+    #: ADR-067 — which issuer holds the account. Observable: it is on the
+    #: payment. Shared across customers, which is what makes an outage a
+    #: detectable event rather than a private coincidence.
+    issuer: str
     amount_paise: int
     due_at: datetime
     next_billing_at: datetime
@@ -116,18 +156,62 @@ def _funding_hour(archetype: str, rng: np.random.Generator) -> int:
     return int(rng.integers(0, 24))
 
 
-def _issuer_outage_days(config: SimConfig, rng: np.random.Generator) -> set[int]:
-    """Poisson outage onsets, LogNormal durations (§38)."""
-    onsets = int(rng.poisson(config.outage_lambda * config.horizon_days))
-    days: set[int] = set()
+#: Distinguishes the issuer-calendar stream from the per-cycle streams, so the
+#: two cannot collide for a given seed.
+_ISSUER_STREAM: Final = 0x1557E
+
+#: An issuer's outage windows as half-open [start, end) UTC intervals.
+OutageCalendar = dict[str, list[tuple[datetime, datetime]]]
+
+#: Days of `due_at` spread in `generate_cycle`, and therefore the span an
+#: outage calendar has to cover for a cycle to be able to land inside one.
+_DUE_SPREAD_DAYS: Final = 28
+
+
+def _issuer_outages(
+    config: SimConfig, rng: np.random.Generator, *, span_days: int
+) -> list[tuple[datetime, datetime]]:
+    """Poisson onsets, LogNormal durations in minutes (§38).
+
+    Minute resolution is kept rather than rounded up to whole days. §38 gives
+    the duration as `LogNormal(4.0, 0.8)` minutes — a median of about 54 — so
+    rounding to a day turned every outage into a 24-hour one and erased exactly
+    the timescale Phase 11's nowcast is asked to resolve.
+    """
+    onsets = int(rng.poisson(config.outage_lambda * span_days))
+    mu, sigma = config.outage_duration
+
+    windows: list[tuple[datetime, datetime]] = []
     for _ in range(onsets):
-        start = int(rng.integers(0, config.horizon_days))
-        mu, sigma = config.outage_duration
+        start = ORIGIN + timedelta(
+            days=int(rng.integers(0, span_days)),
+            minutes=int(rng.integers(0, 24 * 60)),
+        )
         minutes = float(rng.lognormal(mu, sigma))
-        # A long outage spans days; a short one affects only its own day.
-        span = max(1, int(minutes // (60 * 24)) + 1)
-        days.update(range(start, min(start + span, config.horizon_days)))
-    return days
+        windows.append((start, start + timedelta(minutes=minutes)))
+    return sorted(windows)
+
+
+def outage_calendar(
+    config: SimConfig, *, seed: int, span_days: int | None = None
+) -> OutageCalendar:
+    """Every issuer's outage windows for a run.
+
+    Drawn from a stream keyed on the *seed alone*, never on how many cycles are
+    being generated, so ADR-029's prefix property survives: a 100-cycle run and
+    a 10,000-cycle run see the same issuers going down at the same moments.
+    """
+    span = span_days if span_days is not None else _DUE_SPREAD_DAYS + config.horizon_days
+    root = np.random.SeedSequence([seed, _ISSUER_STREAM])
+    return {
+        issuer: _issuer_outages(config, np.random.default_rng(child), span_days=span)
+        for issuer, child in zip(ISSUERS, root.spawn(len(ISSUERS)), strict=True)
+    }
+
+
+def is_down(calendar: OutageCalendar, issuer: str, at: datetime) -> bool:
+    """Whether `issuer` was inside an outage window at `at`."""
+    return any(start <= at < end for start, end in calendar.get(issuer, ()))
 
 
 def _emit_code(cause: str, masked: bool) -> str:
@@ -166,6 +250,16 @@ def _choose_stable(key: str, mix: dict[str, float]) -> str:
     return sorted(mix)[-1]
 
 
+def _stable_index(key: str, modulus: int) -> int:
+    """A deterministic index in `key` — the same trick as `_choose_stable`.
+
+    Used for the issuer, which is a property of the person and not of the
+    cycle, and which must not consume an RNG draw (ADR-029).
+    """
+    digest = hashlib.sha256(f"issuer:{key}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") % modulus
+
+
 def _choose(rng: np.random.Generator, mix: dict[str, float]) -> str:
     keys = sorted(mix)  # sorted so the mapping from draw to key is stable
     weights = np.array([mix[k] for k in keys], dtype=float)
@@ -178,8 +272,15 @@ def generate_cycle(
     *,
     tenant_id: str,
     index: int,
+    calendar: OutageCalendar | None = None,
 ) -> SimulatedCycle:
-    """One cycle with its full observable stream and its ground truth."""
+    """One cycle with its full observable stream and its ground truth.
+
+    `calendar` carries the shared issuer outage windows (ADR-067). It is
+    optional only so a caller can generate one cycle in isolation; every
+    population path passes one, because without it "the issuer was down" is a
+    private fact and no peer can corroborate it.
+    """
     customer_index = index // max(config.cycles_per_customer, 1)
     customer_id = f"cust_{customer_index:07d}"
 
@@ -188,6 +289,9 @@ def generate_cycle(
     # a UPI mandate with one merchant and a card mandate with another.
     archetype = _choose_stable(customer_id, config.payday_mix)
     rail = _choose(rng, config.rail_mix)
+    # A person banks with one bank, so the issuer is stable per customer for
+    # the same reason ADR-058 made the payday archetype stable.
+    issuer = ISSUERS[_stable_index(customer_id, len(ISSUERS))]
 
     mandate_id = f"sub_{index:07d}"
     cycle_id = f"inv_{index:07d}"
@@ -199,7 +303,6 @@ def generate_cycle(
     next_billing_at = due_at + timedelta(days=30)
 
     funding_days = _payday_offsets(archetype, rng, config.horizon_days)
-    outage_days = _issuer_outage_days(config, rng)
 
     # The first debit lands on day 0. Funded iff money arrived by then, and —
     # unless non_absorbing — it stays funded once it has arrived.
@@ -209,13 +312,25 @@ def generate_cycle(
         # this is that assumption's stated limitation, made measurable.
         funded_by_day0 = bool(rng.random() > 0.5)
 
-    issuer_down = 0 in outage_days
+    if calendar is None:
+        calendar = {issuer: _issuer_outages(config, rng, span_days=config.horizon_days)}
+    issuer_down = is_down(calendar, issuer, due_at)
     issuer_state = ISSUER_DEGRADED if issuer_down else "healthy"
 
-    cause = _classify(config, rng, funded=funded_by_day0, issuer_down=issuer_down)
+    cause = _classify(
+        config,
+        rng,
+        funded=funded_by_day0,
+        issuer_down=issuer_down,
+        amount_paise=amount_paise,
+        limit_paise=customer_limit_paise(customer_id),
+        fraud_propensity=fraud_propensity(customer_id),
+    )
     succeeded = cause is None
 
-    masked = bool(cause in (NO_FUNDS, "fraud_hold") and rng.random() < config.mask_05_rate)
+    # ADR-065: several causes hide behind 05, at different rates, so the
+    # bucket is a genuine mixture rather than one component wearing a disguise.
+    masked = bool(cause is not None and rng.random() < config.mask_probability(cause))
 
     first_funding = min((d for d in funding_days if d >= 0), default=None)
     funding_hour = _funding_hour(archetype, rng)
@@ -223,6 +338,9 @@ def generate_cycle(
         due_at + timedelta(days=first_funding, hours=funding_hour)
         if first_funding is not None
         else None
+    )
+    funding_windows = _funding_windows(
+        config, funding_days, due_at=due_at, funding_hour=funding_hour
     )
 
     observables = _emit_events(
@@ -241,6 +359,7 @@ def generate_cycle(
         customer_id=customer_id,
         cycle_id=cycle_id,
         rail=rail,
+        issuer=issuer,
         amount_paise=amount_paise,
         due_at=due_at,
         next_billing_at=next_billing_at,
@@ -248,6 +367,7 @@ def generate_cycle(
         truth=GroundTruth(
             true_cause=cause or "none",
             true_funding_time=true_funding_time,
+            funding_windows=funding_windows,
             issuer_state=issuer_state,
             payday_archetype=archetype,
             masked_as_05=masked,
@@ -255,14 +375,93 @@ def generate_cycle(
     )
 
 
+def customer_limit_paise(customer_id: str) -> int:
+    """A stable per-customer debit ceiling, in integer paise (ADR-069).
+
+    §20 says `amount / p75(customer successful debits)` discriminates
+    `limit_breach`. That is only true if a limit breach actually depends on the
+    amount — so the customer has a ceiling, fixed for the person the way
+    ADR-058 fixed their payday, and a debit's risk of breaching it is a
+    function of how close it comes.
+    """
+    digest = hashlib.sha256(f"limit:{customer_id}".encode()).digest()
+    roll = int.from_bytes(digest[:8], "big") / float(1 << 64)
+    return int(_LIMIT_FLOOR_PAISE + roll * (_LIMIT_CEILING_PAISE - _LIMIT_FLOOR_PAISE))
+
+
+def fraud_propensity(customer_id: str) -> float:
+    """How readily this account trips a fraud rule (ADR-069).
+
+    Stable for the person, like their payday (ADR-058) and their ceiling. It has
+    to be a property of the account rather than of the debit, or §20's
+    `sibling_failure_rate` — "this customer's other mandates, same window" —
+    has nothing to correlate with and cannot rule the customer side in.
+    """
+    digest = hashlib.sha256(f"fraud:{customer_id}".encode()).digest()
+    roll = int.from_bytes(digest[:8], "big") / float(1 << 64)
+    return _FRAUD_FLOOR + roll * (_FRAUD_CEILING - _FRAUD_FLOOR)
+
+
+def _funding_windows(
+    config: SimConfig,
+    funding_days: list[int],
+    *,
+    due_at: datetime,
+    funding_hour: int,
+) -> tuple[tuple[datetime, datetime], ...]:
+    """When the account actually held money (ADR-073).
+
+    Absorbing (the default): one open-ended window from the first arrival, which
+    is exactly the old behaviour expressed as an interval.
+
+    Non-absorbing: one bounded window per payday. This is what §21 means by
+    "money arrives and is spent", and it is the difference between a retry
+    schedule that can miss and one that cannot.
+    """
+    arrivals = sorted(day for day in funding_days if day >= 0)
+    if not arrivals:
+        return ()
+
+    if not config.non_absorbing:
+        start = due_at + timedelta(days=arrivals[0], hours=funding_hour)
+        return ((start, start + timedelta(days=365)),)
+
+    dwell = timedelta(hours=config.funds_dwell_hours)
+    return tuple(
+        (
+            due_at + timedelta(days=day, hours=funding_hour),
+            due_at + timedelta(days=day, hours=funding_hour) + dwell,
+        )
+        for day in arrivals
+    )
+
+
 def _classify(
-    config: SimConfig, rng: np.random.Generator, *, funded: bool, issuer_down: bool
+    config: SimConfig,
+    rng: np.random.Generator,
+    *,
+    funded: bool,
+    issuer_down: bool,
+    amount_paise: int,
+    limit_paise: int,
+    fraud_propensity: float,
 ) -> str | None:
     """The latent cause of failure, or None if the debit succeeds.
 
     Order matters and is deliberate: an issuer outage fails the debit regardless
     of the customer's balance, which is exactly why `issuer_wilson_lower` and
     `peer_success_rate` discriminate in §20's feature table.
+
+    **ADR-069 — the residual causes depend on observables.** They used to be
+    drawn from a bare uniform roll, which meant `limit_breach` was independent
+    of the amount and `fraud_hold` independent of velocity. §20 asserts the
+    opposite for both, so every model was being asked to recover a signal the
+    simulator had deleted, and the confusion matrix measured the simulator's
+    arbitrariness rather than the model's skill — the same defect ADR-035
+    recorded for code 05.
+
+    The *total* residual failure probability is held at its previous value, so
+    only the split between causes moves, not the overall failure rate.
     """
     if issuer_down:
         return ISSUER_DEGRADED
@@ -270,13 +469,32 @@ def _classify(
         return NO_FUNDS
 
     # Funded and the issuer is healthy: only the residual causes remain.
+    budget = config.base_failure_rate * 0.45
+
+    # A debit far under the ceiling rarely breaches it; one at or over it often
+    # does. Squared so the rise is concentrated near the limit rather than
+    # spread evenly, which is how a real ceiling behaves.
+    closeness = min(3.0, (amount_paise / limit_paise) ** 2)
+    # §20 lists `sibling_failure_rate` as the feature that "rules customer-side
+    # in". A fraud rule fires on the *account*, not on one debit, so a
+    # fraud-prone customer's mandates all suffer — which is precisely what
+    # makes the sibling rate observable evidence rather than a coincidence.
+    velocity = fraud_propensity
+
+    weights = {
+        LIMIT_BREACH: 0.25 * closeness,
+        FRAUD_HOLD: 0.15 * velocity,
+        MANDATE_DEAD: 0.05,
+    }
+    total = sum(weights.values())
+    scale = budget / total if total > 0 else 0.0
+
     roll = float(rng.random())
-    if roll < config.base_failure_rate * 0.25:
-        return LIMIT_BREACH
-    if roll < config.base_failure_rate * 0.4:
-        return "fraud_hold"
-    if roll < config.base_failure_rate * 0.45:
-        return MANDATE_DEAD
+    cumulative = 0.0
+    for cause, weight in weights.items():
+        cumulative += weight * scale
+        if roll < cumulative:
+            return cause
     return None
 
 
@@ -361,6 +579,7 @@ def generate(config: SimConfig, *, seed: int, tenant_id: str, cycles: int) -> li
     depend on how many cycles preceded it — which is what makes a 100-cycle run
     a genuine prefix of a 10,000-cycle run.
     """
+    calendar = outage_calendar(config, seed=seed)
     root = np.random.SeedSequence(seed)
     return [
         generate_cycle(
@@ -368,6 +587,7 @@ def generate(config: SimConfig, *, seed: int, tenant_id: str, cycles: int) -> li
             np.random.default_rng(child),
             tenant_id=tenant_id,
             index=index,
+            calendar=calendar,
         )
         for index, child in enumerate(root.spawn(cycles))
     ]

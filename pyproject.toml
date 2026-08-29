@@ -15,6 +15,7 @@ dependencies = [
     "alembic>=1.14",                # ADR-011, project standard
     "pyyaml>=6.0",                  # ADR-026; rule pack format chosen in ADR-020
     "numpy>=2.1",                   # ADR-029; reproducible streams for the simulator
+    "scikit-learn>=1.9.0",  # ADR-064; §21's V1 GBM hazard and isotonic calibration
 ]
 
 [dependency-groups]
@@ -86,6 +87,13 @@ plugins = []
 # Alembic's generated env/version modules are not worth strict-typing.
 module = ["migrations.*"]
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+# scikit-learn ships no py.typed marker (ADR-064). Untyped at the boundary
+# only: every function in `prayas.models` that touches it still declares and
+# returns concrete types, so the Any stops at the import.
+module = ["sklearn.*"]
+ignore_missing_imports = true
 
 # ─────────────────────────── pytest ───────────────────────────
 [tool.pytest.ini_options]

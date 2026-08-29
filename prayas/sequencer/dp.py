@@ -90,6 +90,8 @@ def _validate(
     budget: int,
     lead_slots: int,
     p_recoverable: float,
+    *,
+    monotone: bool = True,
 ) -> int:
     horizon = int(survival.shape[0])
     if horizon == 0:
@@ -105,14 +107,17 @@ def _validate(
         raise ValueError(f"lead_slots must be non-negative, got {lead_slots}")
     if not 0.0 <= p_recoverable <= 1.0:
         raise ValueError(f"p_recoverable must be a probability, got {p_recoverable}")
-    if np.any(np.diff(survival) > 1e-12):
+    if monotone and np.any(np.diff(survival) > 1e-12):
         raise ValueError("survival must be monotone non-increasing (§23.2)")
+    if not monotone and (np.any(survival < 0.0) or np.any(survival > 1.0)):
+        raise ValueError("presence must be a probability in [0, 1] (ADR-075)")
     return horizon
 
 
 def solve(
     *,
-    survival: FloatArray,
+    survival: FloatArray | None = None,
+    presence: FloatArray | None = None,
     legal: BoolArray,
     cost: IntArray,
     amount_paise: int,
@@ -128,7 +133,42 @@ def solve(
 
     `cost` is `cost[b][t]` (ADR-038), indexed by attempts *remaining*, matching
     the DP's own state.
+
+    **Exactly one of `survival` or `presence` (ADR-075).**
+
+    `survival` is §23.2 as written: funding is absorbing, and the success
+    probability of attempting at `t'` after failing at `t` is
+    `1 - S(t')/S(t)`. That expression is monotone in `t'` for every valid `S`,
+    so the latest legal slot always weakly dominates and the curve's *shape*
+    never enters the decision.
+
+    `presence` is `P(funds present at t')` — the ADR-075 deviation. §21 states
+    that "money arrives and is spent", and under those dynamics the absorbing
+    ordering is measurably reversed: firing at the first legal slot beats the
+    last (34.68% against 31.86%), and the ceiling is 76.04% against the 31.86%
+    patience achieves. Presence is not monotone, which is precisely why it can
+    express "attend to *this* customer's payday" — and precisely why §23.2's
+    formulation could not.
     """
+    if (survival is None) == (presence is None):
+        raise ValueError("pass exactly one of survival or presence (ADR-075)")
+
+    if presence is not None:
+        return _solve_presence(
+            presence=presence,
+            legal=legal,
+            cost=cost,
+            amount_paise=amount_paise,
+            continuation_value_paise=continuation_value_paise,
+            dr=dr,
+            health=health,
+            budget=budget,
+            lead_slots=lead_slots,
+            p_recoverable=p_recoverable,
+            min_ev_paise=min_ev_paise,
+        )
+
+    assert survival is not None
     horizon = _validate(survival, legal, cost, dr, health, budget, lead_slots, p_recoverable)
 
     # ADR-061: the base case is the mandate's own value, not zero. A cycle
@@ -161,6 +201,64 @@ def solve(
         # A state whose account is already funded has no decision to make.
         ev[funded, :] = -np.inf
 
+        best = np.argmax(ev, axis=1)
+        best_ev = ev[slots, best]
+
+        # ADR-061: continue only if it beats *keeping the mandate*, not zero.
+        floor = continuation_value_paise + min_ev_paise
+        take = best_ev > floor
+        value[b] = np.where(take, best_ev, float(continuation_value_paise))
+        action[b] = np.where(take, best, STOP)
+
+    return Policy(value=value, action=action)
+
+
+def _solve_presence(
+    *,
+    presence: FloatArray,
+    legal: BoolArray,
+    cost: IntArray,
+    amount_paise: int,
+    continuation_value_paise: int,
+    dr: FloatArray,
+    health: FloatArray,
+    budget: int,
+    lead_slots: int,
+    p_recoverable: float,
+    min_ev_paise: float,
+) -> Policy:
+    """§23.2's recursion over `P(funds present at t')` instead of survival.
+
+    **The whole matrix collapses to a row.** Under §23.2 the success
+    probability depends on both the failure slot and the candidate, so `ev` is
+    two-dimensional. Presence depends only on the candidate, so every failure
+    slot scores the candidates identically and the reachability mask is the
+    only thing that differs between rows. That is not a shortcut — it is what
+    "the observation at `t` no longer renormalises the future" means.
+
+    The conditioning that §23.2 carried is genuinely dropped: a failure at `t`
+    said the account was empty then, and under absorbing funding that shifted
+    the entire remaining curve. Under non-absorbing dynamics it says much less,
+    because the next payday is a fresh event. Slots close to `t` are the
+    exception — see `correlation_slots` in the harness, which damps them.
+    """
+    horizon = _validate(
+        presence, legal, cost, dr, health, budget, lead_slots, p_recoverable, monotone=False
+    )
+
+    value = np.full((budget + 1, horizon), float(continuation_value_paise), dtype=np.float64)
+    action = np.full((budget + 1, horizon), STOP, dtype=np.int64)
+    total = amount_paise + continuation_value_paise
+    p = np.clip(presence * health * p_recoverable, 0.0, 1.0)
+
+    slots = np.arange(horizon)
+    valid = (slots[None, :] >= (slots[:, None] + lead_slots)) & legal[None, :]
+
+    for b in range(1, budget + 1):
+        g = value[b - 1] - dr * continuation_value_paise
+        row = p * total + (1.0 - p) * g - cost[b]
+
+        ev = np.where(valid, row[None, :], -np.inf)
         best = np.argmax(ev, axis=1)
         best_ev = ev[slots, best]
 
@@ -230,7 +328,8 @@ def stopping_rationale(
     policy: Policy,
     budget_remaining: int,
     last_failure_slot: int,
-    survival: FloatArray,
+    survival: FloatArray | None = None,
+    presence: FloatArray | None = None,
     legal: BoolArray,
     cost: IntArray,
     amount_paise: int,
@@ -251,12 +350,20 @@ def stopping_rationale(
     """
     if not policy.should_stop(budget_remaining, last_failure_slot):
         raise ValueError("not a stopping state — policy has a chosen action")
+    if (survival is None) == (presence is None):
+        raise ValueError("pass exactly one of survival or presence (ADR-075)")
 
-    horizon = survival.shape[0]
+    curve = survival if survival is not None else presence
+    assert curve is not None
+    horizon = curve.shape[0]
     lo = last_failure_slot + lead_slots
     w_rupees = continuation_value_paise / 100
 
-    if lo >= horizon or survival[last_failure_slot] <= SURVIVAL_FLOOR:
+    # On the presence path there is no "already funded" state to short-circuit:
+    # money can be present now and gone later, so the only reason to stop early
+    # is that nothing legal remains.
+    exhausted = survival is not None and survival[last_failure_slot] <= SURVIVAL_FLOOR
+    if lo >= horizon or exhausted:
         return (
             f"stopped: no legal slot remains within the horizon; "
             f"attempts left {budget_remaining}; "
@@ -272,11 +379,15 @@ def stopping_rationale(
         )
 
     total = amount_paise + continuation_value_paise
-    p = (
-        (1.0 - survival[candidates] / survival[last_failure_slot])
-        * health[candidates]
-        * p_recoverable
-    )
+    if survival is not None:
+        p = (
+            (1.0 - survival[candidates] / survival[last_failure_slot])
+            * health[candidates]
+            * p_recoverable
+        )
+    else:
+        assert presence is not None
+        p = np.clip(presence[candidates] * health[candidates] * p_recoverable, 0.0, 1.0)
     ev = (
         p * total
         + (1.0 - p)

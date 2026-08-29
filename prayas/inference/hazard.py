@@ -97,6 +97,59 @@ def survival(hazards: npt.ArrayLike) -> npt.NDArray[np.float64]:
     return np.cumprod(1.0 - np.clip(h, _MIN_HAZARD, _MAX_HAZARD))
 
 
+#: §21's leak parameter, per day. Zero keeps the strictly-absorbing behaviour
+#: every closed phase was measured under; a positive value is the mitigation
+#: §21 names for its own stated limitation.
+DEFAULT_LEAK_PER_DAY: Final = 0.0
+
+
+def leaky_survival(
+    hazards: npt.ArrayLike,
+    *,
+    leak_per_day: float = DEFAULT_LEAK_PER_DAY,
+    hours_per_slot: float = 1.0,
+) -> npt.NDArray[np.float64]:
+    """S(t) with §21's leak — "money arrives and is spent".
+
+    §21 names three mitigations for funding not being absorbing: "a leak
+    parameter decaying survival over long gaps, a 30-day horizon cap, and
+    validation against simulator configurations with explicitly non-absorbing
+    dynamics". This is the first.
+
+    **The leak decays the credit given to distant funding, not the curve's
+    monotonicity.** §23.2 requires `S` to be non-increasing, and
+    `p(t | t_last) = 1 - S(t)/S(t_last)` is monotone in `t` for *any* such `S` —
+    so no transformation here can make a later slot look worse than an earlier
+    one outright. What it can do is shrink the *gain* from waiting, and shrink
+    it differently for different customers: money forecast to arrive on day two
+    keeps almost all its credit, money forecast for day six keeps much less.
+    Against a rising `Δr` that is what decides where a mandate stops waiting.
+
+    **This is an approximation, and the direction of its error is known.** The
+    true quantity is `P(funds present at t)`, which sums over arrivals `u <= t`
+    weighted by how long the money survives the gap `t - u`. That is not
+    monotone — it falls once money leaves — so §23.2's interface cannot carry
+    it, and `dp._validate` rejects it outright. What is implemented instead
+    discounts hazard by *elapsed time from the due date*, not by the gap between
+    arrival and attempt. It therefore penalises a late-funding customer even
+    when the attempt would land immediately after their money arrives, which is
+    precisely the case a liquidity model exists to catch. Expect it to push
+    attempts earlier than the true leak would, and expect that error to grow
+    with `leak_per_day`.
+
+    With `leak_per_day = 0` this is exactly `survival`, so the default changes
+    nothing that has already been measured.
+    """
+    h = np.asarray(hazards, dtype=float)
+    if leak_per_day < 0:
+        raise ValueError("leak_per_day must be non-negative")
+    if leak_per_day == 0.0:
+        return survival(h)
+
+    days = np.arange(h.size, dtype=np.float64) * hours_per_slot / 24.0
+    return survival(np.clip(h, _MIN_HAZARD, _MAX_HAZARD) * np.exp(-leak_per_day * days))
+
+
 def marginal_probability(hazards: npt.ArrayLike, t: int) -> float:
     """P(funded by end of slot t), unconditioned.
 

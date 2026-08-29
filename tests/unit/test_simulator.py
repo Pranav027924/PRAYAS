@@ -18,8 +18,10 @@ import pytest
 from prayas.sim.config import (
     CHRONICALLY_DRY,
     DO_NOT_HONOR,
+    FRAUD_HOLD,
     GIG_IRREGULAR,
     ISSUER_DEGRADED,
+    LIMIT_BREACH,
     NO_FUNDS,
     SALARIED_1ST,
     ConfigError,
@@ -132,28 +134,86 @@ def test_rail_mix_is_reproduced_within_tolerance() -> None:
         assert observed[rail] / len(cycles) == pytest.approx(expected, abs=0.03)
 
 
-def test_mask_05_rate_is_reproduced_within_tolerance() -> None:
-    """§20 — roughly half of no_funds surfacing as 05 is what makes cause
-    inference necessary, so this parameter has to be faithful."""
-    config = SimConfig(mask_05_rate=0.5)
-    cycles = generate(config, seed=44, tenant_id=TENANT, cycles=4000)
+@pytest.mark.parametrize("cause", [NO_FUNDS, ISSUER_DEGRADED, FRAUD_HOLD, LIMIT_BREACH])
+def test_each_cause_masks_at_its_own_declared_rate(cause: str) -> None:
+    """ADR-065 — every cause that can hide behind 05 does so at its own rate.
 
-    no_funds = [c for c in cycles if c.truth.true_cause == NO_FUNDS]
-    assert len(no_funds) > 200, "too few no_funds cycles to measure masking"
+    §20 makes 05 a *mixture*; the per-cause weight is what sets each
+    component's share, so each has to be faithful independently.
+    """
+    config = SimConfig(mask_05_rate=0.5, outage_lambda=0.30)
+    # `fraud_hold` is deliberately rare — well under 1% of cycles — so the
+    # sample is sized for it rather than for `no_funds`, and the tolerance is
+    # set at roughly 3.5 binomial standard errors at that count. Tighter would
+    # flake rather than measure.
+    cycles = generate(config, seed=44, tenant_id=TENANT, cycles=20_000)
 
-    masked = sum(1 for c in no_funds if c.truth.masked_as_05) / len(no_funds)
-    assert masked == pytest.approx(0.5, abs=0.05)
+    of_cause = [c for c in cycles if c.truth.true_cause == cause]
+    assert len(of_cause) > 150, f"too few {cause} cycles to measure masking"
+
+    masked = sum(1 for c in of_cause if c.truth.masked_as_05) / len(of_cause)
+    assert masked == pytest.approx(config.mask_probability(cause), abs=0.08)
 
 
 @pytest.mark.parametrize("rate", [0.0, 1.0])
 def test_mask_rate_extremes_are_honoured(rate: float) -> None:
-    """Both ends of the boundary, per §40.2's discipline."""
-    cycles = generate(SimConfig(mask_05_rate=rate), seed=45, tenant_id=TENANT, cycles=1500)
-    no_funds = [c for c in cycles if c.truth.true_cause == NO_FUNDS]
-    assert no_funds
+    """Both ends of the boundary, per §40.2's discipline.
 
-    masked = sum(1 for c in no_funds if c.truth.masked_as_05)
-    assert masked == (len(no_funds) if rate == 1.0 else 0)
+    At 0.0 nothing hides, whatever a cause's weight. At 1.0 each cause masks at
+    its full declared weight — which is not 1.0 for all of them, because a
+    `no_funds` decline usually does arrive as the plain 51 that §20 describes.
+    """
+    config = SimConfig(mask_05_rate=rate, outage_lambda=0.30)
+    cycles = generate(config, seed=45, tenant_id=TENANT, cycles=20_000)
+
+    if rate == 0.0:
+        assert not [c for c in cycles if c.truth.masked_as_05]
+        return
+
+    for cause in (NO_FUNDS, ISSUER_DEGRADED, FRAUD_HOLD, LIMIT_BREACH):
+        of_cause = [c for c in cycles if c.truth.true_cause == cause]
+        assert of_cause, cause
+        masked = sum(1 for c in of_cause if c.truth.masked_as_05) / len(of_cause)
+        assert masked == pytest.approx(config.mask_probability(cause), abs=0.08), cause
+
+
+def test_code_05_is_a_genuine_mixture_about_half_no_funds() -> None:
+    """ADR-065's evidence, and the precondition for Phase 11's EM item.
+
+    §20: 05 is "the least informative signal in payments, with roughly half
+    being insufficient funds in disguise". Before ADR-065 the bucket was 95%
+    `no_funds` — a mixture with one component, from which EM can learn nothing
+    and against which a confusion matrix proves nothing.
+    """
+    cycles = generate(SimConfig(), seed=99, tenant_id=TENANT, cycles=12000)
+
+    seen = Counter(
+        c.truth.true_cause
+        for c in cycles
+        for e in c.observables
+        if _entity(e).get("error_code") == DO_NOT_HONOR
+        or _entity(e).get("decline_code") == DO_NOT_HONOR
+    )
+    total = sum(seen.values())
+    assert total > 500, "too few 05 declines to characterise the bucket"
+
+    assert seen[NO_FUNDS] / total == pytest.approx(0.5, abs=0.10), (
+        f"§20 wants roughly half insufficient funds; got {seen[NO_FUNDS] / total:.1%}"
+    )
+    # Every other component must be present, or EM has nothing to find.
+    # `issuer_degraded` is held to a lower bar on purpose: ADR-067 gives outages
+    # their real duration in minutes rather than rounding them up to whole days,
+    # so an issuer is down rarely — but when it is, it fails everyone at once,
+    # which is what makes it detectable at all (§20's `peer_success_rate`).
+    for cause in (FRAUD_HOLD, LIMIT_BREACH):
+        assert seen[cause] / total > 0.08, f"{cause} is too rare in 05 to be recoverable"
+    assert seen[ISSUER_DEGRADED] / total > 0.015, "issuer_degraded absent from 05 entirely"
+
+
+def _entity(event: dict[str, Any]) -> dict[str, Any]:
+    entity = event.get("body", {}).get("payload", {}).get("payment", {}).get("entity", {})
+    assert isinstance(entity, dict)
+    return entity
 
 
 def test_more_outages_produce_more_issuer_degraded_cycles() -> None:

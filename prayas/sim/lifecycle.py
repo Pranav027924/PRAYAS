@@ -20,13 +20,13 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Final
 
 import numpy as np
 
 from prayas.sim.config import SimConfig
-from prayas.sim.generate import SimulatedCycle, generate_cycle
+from prayas.sim.generate import SimulatedCycle, generate_cycle, outage_calendar
 
 #: §22 baseline per-day revocation hazard for a healthy, paying mandate.
 #: Small: most mandates die from neglect, not spontaneously.
@@ -120,6 +120,7 @@ def generate_lifecycle(
     *,
     tenant_id: str,
     mandate_index: int,
+    calendar: dict[str, list[tuple[datetime, datetime]]] | None = None,
 ) -> MandateLifecycle:
     """One mandate billed until it is revoked or the observation window ends."""
     cycles: list[SimulatedCycle] = []
@@ -136,6 +137,7 @@ def generate_lifecycle(
             rng,
             tenant_id=tenant_id,
             index=mandate_index * config.cycles_per_mandate + seq_no,
+            calendar=calendar,
         )
         # Successive cycles of one mandate bill a month apart and share an id.
         cycle = SimulatedCycle(
@@ -144,6 +146,7 @@ def generate_lifecycle(
             customer_id=f"cust_{mandate_index // max(config.cycles_per_customer, 1):07d}",
             cycle_id=f"{mandate_id}_inv{seq_no:03d}",
             rail=cycle.rail if seq_no == 0 else state.rail,
+            issuer=cycle.issuer,
             amount_paise=cycle.amount_paise,
             due_at=cycle.due_at + timedelta(days=30 * seq_no),
             next_billing_at=cycle.due_at + timedelta(days=30 * (seq_no + 1)),
@@ -187,6 +190,7 @@ def generate_lifecycles(
     if mandates <= 0:
         raise ValueError(f"mandates must be positive, got {mandates}")
 
+    calendar = outage_calendar(config, seed=seed)
     root = np.random.SeedSequence(seed)
     return [
         generate_lifecycle(
@@ -194,6 +198,7 @@ def generate_lifecycles(
             np.random.default_rng(child),
             tenant_id=tenant_id,
             mandate_index=index,
+            calendar=calendar,
         )
         for index, child in enumerate(root.spawn(mandates))
     ]

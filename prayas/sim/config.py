@@ -102,8 +102,31 @@ class SimConfig:
     outage_lambda: float = 0.05
     #: LogNormal(mu, sigma) outage duration in minutes.
     outage_duration: tuple[float, float] = (4.0, 0.8)
-    #: P(surface as "05" | true cause = no_funds). §38 suggests ~0.5.
+    #: Overall masking intensity. Scales every per-cause weight below, so 0.0
+    #: means nothing hides behind 05 and the robustness sweep's extremes keep
+    #: their meaning.
     mask_05_rate: float = 0.5
+
+    #: ADR-065 — how readily each latent cause surfaces as "05" rather than its
+    #: own code, *relative* to `mask_05_rate`.
+    #:
+    #: §20 calls 05 "the least informative signal in payments, with roughly half
+    #: being insufficient funds in disguise". Until now only `no_funds` and
+    #: `fraud_hold` reached the bucket, and because unfunded accounts dominate
+    #: the failure population, 05 was **95% `no_funds`** — a mixture with one
+    #: component, which EM cannot learn anything from (ADR-035).
+    #:
+    #: `no_funds` is weighted *down* and the issuer-side causes *up*, because
+    #: "Do Not Honor" is what an issuer returns when it will not itemise a
+    #: refusal — and those refusals are exactly the ones it declines to explain.
+    mask_05_weights: dict[str, float] = field(
+        default_factory=lambda: {
+            NO_FUNDS: 0.16,
+            ISSUER_DEGRADED: 1.70,
+            FRAUD_HOLD: 1.80,
+            LIMIT_BREACH: 1.70,
+        }
+    )
     #: Revocation hazard added per consecutive failure.
     revocation_beta: float = 0.04
     #: Nudge efficacy decay per message.
@@ -116,6 +139,17 @@ class SimConfig:
     #: §21 assumes funding is absorbing: once funded, it stays funded. When True
     #: the account can be drained again, which is the stated limitation measured.
     non_absorbing: bool = False
+
+    #: ADR-073 — hours money stays in the account before other debits consume
+    #: it, when `non_absorbing`. Only meaningful in that mode; under the default
+    #: absorbing dynamics funds never leave, so this is unused and every closed
+    #: phase's numbers are untouched.
+    #:
+    #: §21 names the consequence directly: "money arrives and is spent". Until
+    #: this existed, an attempt at *any* time at or after the funding instant
+    #: succeeded, so waiting until the last legal slot captured all recoverable
+    #: value and no liquidity-timing model could change a decision.
+    funds_dwell_hours: float = 36.0
 
     #: Cycle amount distribution, integer paise. Money is never float.
     amount_paise_range: tuple[int, int] = (9_900, 499_900)
@@ -146,6 +180,10 @@ class SimConfig:
     #: predicted funding. §24.2: "A notice sent 72 hours early is forgotten."
     pdn_attention_decay_hours: float = 18.0
 
+    def mask_probability(self, cause: str) -> float:
+        """P(this cause surfaces as 05), clamped to a probability."""
+        return min(1.0, self.mask_05_rate * self.mask_05_weights.get(cause, 0.0))
+
     def __post_init__(self) -> None:
         _check_mix("payday_mix", self.payday_mix, PAYDAY_ARCHETYPES)
         _check_mix("rail_mix", self.rail_mix, RAILS)
@@ -156,6 +194,11 @@ class SimConfig:
             raise ConfigError("outage_duration sigma must be positive")
         if not 0.0 <= self.mask_05_rate <= 1.0:
             raise ConfigError("mask_05_rate must be a probability")
+        if any(weight < 0 for weight in self.mask_05_weights.values()):
+            raise ConfigError("mask_05_weights must be non-negative")
+        unknown = set(self.mask_05_weights) - set(CAUSES)
+        if unknown:
+            raise ConfigError(f"mask_05_weights has unknown causes: {sorted(unknown)}")
         if not 0.0 <= self.fatigue_decay <= 1.0:
             raise ConfigError("fatigue_decay must be in [0, 1]")
         if self.revocation_beta < 0:
@@ -172,6 +215,8 @@ class SimConfig:
             raise ConfigError("pdn_attention_decay_hours must be positive")
         if self.horizon_days <= 0:
             raise ConfigError("horizon_days must be positive")
+        if self.funds_dwell_hours <= 0:
+            raise ConfigError("funds_dwell_hours must be positive")
 
         low, high = self.amount_paise_range
         if low <= 0 or high < low:

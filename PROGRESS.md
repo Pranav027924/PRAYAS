@@ -1,7 +1,7 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 11 — V1 models (not started)
+Phase 12 — Memory subsystem
 
 ## Phase status
 | # | Phase | Status | Closed on |
@@ -17,13 +17,50 @@ Phase 11 — V1 models (not started)
 | 8 | FIRST DEFENSIBLE NUMBER | CLOSED (with finding) | 2026-08-29 |
 | 9 | Notification optimizer | CLOSED | 2026-08-29 |
 | 10 | Retention subsystem | CLOSED | 2026-08-29 |
-| 11 | V1 models | not started | — |
-| 12–19 | see Execution Playbook | not started | — |
+| 11 | V1 models | CLOSED (with findings) | 2026-08-29 |
+| 12 | Memory subsystem | not started | — |
+| 13–19 | see Execution Playbook | not started | — |
 
-## Exit criteria — current phase
-_Phase 10 closed. Phase 11 not yet started._
+## Exit criteria — current phase (Phase 12 — Memory subsystem)
+- [ ] Profile-informed hazard beats segment-prior-only on customers with ≥3 cycles
+- [ ] No individual profile data crosses a tenant boundary — asserted by test
+- [ ] Aggregates enforce minimum cohort size
+- [ ] Consent withdrawal deletes profile, pseudonymises ledger, suppresses contact — verified end to end
+- [ ] Feature parity job detects injected skew
+
+**Inherited from Phase 11:** FINDING-P11-02 localises the remaining gap to *presence-prediction quality* — the sequencer aims correctly at whatever windows it is shown, and the models are not locating each customer's funding windows sharply enough (40.98% against a 75.20% oracle). Per-customer memory is exactly the lever §27 offers, so the first Phase 12 criterion is the direct continuation of that thread rather than a new one.
 
 ## Closed phases
+
+### Phase 11 — V1 models · closed 2026-08-29 (with findings)
+_Evidence 2026-08-29. **Three of four met; the fourth is not met and is carried as FINDING-P11-02.** CI mirror green: 889 tests, 88.31% coverage, `mypy --strict` on 136 files._
+
+- [~] **V1 beats V0 on held-out log-loss ✅ and on end-to-end incremental lift ❌**
+  - Log-loss: **0.0837 → 0.0696 nats, a 16.8% improvement**, on a split grouped by customer with zero overlap. Both beat a constant base rate. V1's held-out **ECE is 0.0017** against §43's 0.05 alert threshold, and a deliberately miscalibrated model is asserted to exceed it so the metric cannot pass vacuously
+  - End-to-end lift: **not met, and now understood in two stages.** Under §23.2 the criterion was *unachievable by construction* — an oracle bound shows firing at the last legal slot recovers **66.40%** against a **66.40%** ceiling, so no model could improve on it. ADR-075 (your approved Class A) removed that barrier: under §21's non-absorbing dynamics the presence formulation lifts V0 alone from **31.4% to 40.0%** recovery, and slot choice becomes genuinely shape-sensitive
+  - With timing now able to matter, and ADR-076's prior wired in, **V1 still does not beat V0**: ten paired seeds at 8,000 cycles each give **Δ = +1.014% ± 2.425% sd, t = 1.32, 95% CI [−0.721%, +2.749%]**, 7/10 positive — the interval includes zero. **See FINDING-P11-02.** A 16.8% log-loss gain does not reach the money, which is precisely the distinction the Playbook draws when it says the second measure "is the one that counts". Settling it either way needs roughly 45 seeds; that price is recorded rather than approximated
+
+- [x] **Cause inference confusion matrix against simulator ground truth** — the phase artifact. On code 05, EM scores **64.4%** against a **54.2% majority-class floor** and **51.7%** for the V0 heuristic. It recovers `fraud_hold` at **48% recall / 54% precision**, a cause V0 never predicts even once. Held to the majority class rather than to V0, so beating a weak heuristic cannot pass for learning
+- [x] **Nowcast detects injected outages within one window and recovery within three** — **100/100** detections within one window, **100%** recoveries within two, and **0 false alarms in 200 healthy runs**. Both halves are asserted: without the false-alarm bound, "detects every outage" is satisfied by a detector that is always alarming
+- [x] **V0 fallback verified: kill V1, system degrades without firing anything illegal** — killing V1 mid-run switches on the *next decision*, not the next deploy, and both models are fitted up front so the switch costs nothing during an incident. Across all three providers, **0 attempts fired into a slot the gate would deny**, and the degraded system still recovers money
+
+**Artifact — the code-05 confusion matrix against ground truth** (n=3,056; §38: "a claim impossible to make on real data"):
+
+```
+                   no_funds  issuer_d  fraud_ho  limit_br    recall
+no_funds               1548        34        59        14     93.5%
+issuer_degraded          64         4        34         1      3.9%
+fraud_hold              367        15       383        28     48.3%
+limit_breach            225        10       236        34      6.7%
+precision             70.2%      6.3%     53.8%     44.2%
+accuracy                                                      64.4%
+```
+
+Baselines on the same rows: **majority-class 54.2%**, **V0 heuristic 51.7%**. The honest reading is that EM recovers the two causes §20 gives observable signal — `no_funds` from day-of-month and amount, `fraud_hold` from `sibling_failure_rate` — and does *not* recover `issuer_degraded` (only 103 of 3,056 rows, and outages are rare in time by ADR-067) or `limit_breach` (whose `amount_ratio` denominator is the customer's own p75, which is a weak proxy for their ceiling). Reported rather than hidden: a matrix showing 64% while two rows are near zero is more useful than a headline that averages them away.
+
+**Open findings carried:** FINDING-P9-01 (prevention rests on recency, not liquidity), FINDING-P8-01 (downgraded to partially resolved), FINDING-P11-01 (mechanism resolved by ADR-075), FINDING-P11-02 (a better-calibrated model does not produce a better outcome).
+
+
 
 ### Phase 10 — Retention subsystem · closed 2026-08-29
 _Evidence 2026-08-29. **All five met.**_
@@ -71,6 +108,8 @@ _Four of six criteria met, one partially met, one finding carried to Phase 10._
 - [x] **Zero compliance violations in treatment; baseline counted in shadow** — **0** breaches across 5,743 gated actions; §8 shadow count **21,057** violations for the literal 10:00 IST day-1/3/5 policy
 - [x] **Every decision replayable** — 250/250 replayed and hash-verified, exhaustively rather than sampled. Denials replay as readily as allowals (§32). A tampered record is detected while its neighbour still verifies
 - [x] **Robustness: lift survives every perturbation** — **9/9** under ADR-053's strict rule (CI excludes zero), across `non_absorbing`, both `mask_05` extremes, outage heavy/none, 3.5× chronically-dry, 3× revocation, 2× base failure
+  - **Re-run 2026-08-29** after ADR-065/067/069/073 changed the simulator and made `non_absorbing` a genuinely harder perturbation. Still **9/9**. Absolute lifts moved with the population — baseline now **+37.43%** [+33.32%, +41.53%], and `non_absorbing` drops to **+9.86%** [+6.68%, +13.04%], which is the honest cost of §21's stated limitation now that money can actually leave
+  - **`model_contributes` is `no` in 8 of 9** (only `dry_heavy` differs) — see FINDING-P8-01, now downgraded to partially resolved, and FINDING-P11-01 for why
 
 **The number, and what it means.** `+41.0 pp` incremental recovery, 1.51 attempts per recovery versus 8.40, zero gate breaches, every decision replayable. **The lift is real and robust but is NOT attributable to liquidity forecasting** — replacing the fitted hazard with an uninformative prior reproduces it exactly in 9/9 perturbations. What it demonstrates is attempt economy under a hard regulatory budget. See FINDING-P8-01.
 
@@ -119,7 +158,7 @@ _Four of six criteria met, one partially met, one finding carried to Phase 10._
 
 **Recorded weakness (not a blocker):** V0 cannot separate causes hiding behind code 05 — `fraud_hold` surfacing as 05 is classified `no_funds` 100% of the time. This is the documented reason §20 wants EM in Phase 11.
 
-**Recorded simulator gap (see ADR-035):** the 05 population is ~98% `no_funds`, not the ~50% §20 describes, because `issuer_degraded` deterministically emits 91 and never masquerades as 05. Overall accuracy is therefore *identical* at `mask_05_rate` 0.0 and 1.0 (0.911 both). V0 looks better on 05 than a realistic mix would allow.
+**Recorded simulator gap (ADR-035) — ✅ RESOLVED in Phase 11 by ADR-065:** the 05 population is ~98% `no_funds`, not the ~50% §20 describes, because `issuer_degraded` deterministically emits 91 and never masquerades as 05. Overall accuracy is therefore *identical* at `mask_05_rate` 0.0 and 1.0 (0.911 both). V0 looks better on 05 than a realistic mix would allow.
 
 ### Phase 3 — Simulator · closed 2026-08-26 · tag `phase-3-complete`
 - [x] Distributions match configured parameters — payday mix, rail mix and `mask_05_rate` each within ±0.03 over 4,000 cycles, plus both boundary extremes (0.0 and 1.0) asserted exactly
@@ -355,13 +394,13 @@ Each leaves Python to auto-inject the real builtins module. They survived becaus
 **Options:** numpy only; scikit-learn; scipy only.
 **Rationale:** ~40 lines, and project standards forbid adding a dependency to avoid writing twenty. Keeping the definitions in-repo makes them auditable — equal-width versus equal-frequency binning changes ECE materially, and §21 says a miscalibrated model "computes the wrong money". §40.2 already sets this pattern by requiring the Wilson bound and CUSUM be checked against reference implementations rather than imported. sklearn would also not pay forward: Phase 11's GBM will likely want LightGBM or XGBoost.
 
-### ADR-035 · 2026-08-26 · OPEN — simulator's code-05 composition
+### ADR-035 · 2026-08-26 · ✅ RESOLVED (Phase 11, by ADR-065) — simulator's code-05 composition
 **Status:** recorded, not yet resolved. Surfaced by a Phase 4 test whose premise turned out to be false.
 **Finding:** §20 characterises code 05 as "30-40% of all declines... roughly half being insufficient funds in disguise". The simulator produces an 05 population that is **~98% `no_funds`**, because `issuer_degraded` deterministically emits 91 and `limit_breach` emits 61 — neither ever masquerades as 05. §38 defines `mask_05_rate` solely as `P(05 | no_funds)`, so the simulator is faithful to §38 while not reproducing §20's account of the real signal.
 **Measured consequence:** overall V0 cause accuracy is identical at `mask_05_rate` 0.0 and 1.0 (0.911 both), because masking moves `no_funds` from 51 to 05 and V0's default answer for 05 is already `no_funds`. Masking, as modelled, creates no difficulty at all.
 **Why it matters:** Phase 11's EM model would be scored against a flattering V0 baseline. The 05 population is where §20 says the work is, and here it is nearly pure.
 **Options when addressed:** extend masking to `issuer_degraded` and `limit_breach` (a deviation beyond §38's stated parameter, so Class A); or accept the gap and score Phase 11 only on the sub-population where causes genuinely compete.
-**Pinned by:** `test_masking_does_not_change_overall_accuracy_here`, which fails if the composition changes — so this cannot be silently fixed or silently worsened.
+**Pinned by:** `test_masking_degrades_v0_accuracy`, which now asserts the *opposite* — masking must cost V0 accuracy. If it ever goes flat again the mixture has collapsed back to one component and this finding has regressed.
 
 ### ADR-036 · 2026-08-27 · Mandate continuation value `W` placeholder
 **Decision:** `W = 12 × A` until §22's revocation model lands in Phase 10.
@@ -449,9 +488,22 @@ Each leaves Python to auto-inject the real builtins module. They survived becaus
 **Rationale:** If the audit's baseline and the control arm ever diverge, the published claim that "the default retry behaviour produces N violations per 10,000 cycles" would describe a policy the experiment never ran, and the two numbers become quietly incomparable. Importing Phase 2's shadow harness directly would guarantee they match but couple the measurement plane to the gate's audit tooling, so a change made for the report silently alters the control arm. One definition both cite keeps the coupling explicit.
 
 ### FINDING-P8-01 · 2026-08-29 · The lift does not come from the liquidity model
-**Status:** ✅ **RESOLVED 2026-08-29 in Phase 10.** For the first time in the
-project, the fitted hazard and an uninformative prior give **different**
-answers: the fitted curve attempts at day 6, the flat prior **stops**.
+**Status:** ⚠️ **PARTIALLY RESOLVED.** Downgraded from RESOLVED on 2026-08-29
+after Phase 11 re-measured it. Phase 10 showed the fitted hazard and an
+uninformative prior give **different decisions** on particular mandate states —
+the fitted curve attempts at day 6, the flat prior **stops** — and that remains
+true. But this finding's own claim was about the **aggregate lift**, and that
+claim still holds: re-running §38's sweep after ADR-065/067/069/073 gives
+`model_contributes = no` in **8 of 9 perturbations** (only `dry_heavy` differs).
+Replacing the fitted curve with a flat prior still reproduces the lift.
+
+**Phase 11 explains why, and the explanation is not a modelling failure.**
+FINDING-P11-01's oracle bound shows that under absorbing funding, firing at the
+last legal slot recovers **66.40%** against an achievable ceiling of **66.40%**.
+The optimal policy does not consult a hazard curve, so no curve — fitted, flat,
+or perfect — can move the aggregate. A better model changes individual
+decisions (what Phase 10 demonstrated) without changing what those decisions
+achieve. The two findings are one phenomenon seen from two distances.
 
 **What it took — two changes, and neither alone was enough:**
 1. **ADR-062, time-dependent `Δr`.** With a constant Δr, waiting stayed free and
@@ -643,6 +695,199 @@ so there is an eve to aim at. That is a §38 modelling question, not a planner b
 ### ADR-063 · 2026-08-29 · `W` computed from the fitted revocation model
 **Decision:** `W = Σ δ^k · P(alive at k) · A_k · P(collect|alive)` with `P(alive at k)` from §22's fitted hazard, replacing ADR-036's flat `12 × A`.
 **Rationale:** ADR-036 derived 12× from Appendix C's δ and K under an *assumed* survival decay, because §22's model did not exist. It does now. The placeholder was not merely imprecise but wrong in a way that mattered: it valued a four-failure mandate identically to a healthy one, when the fitted model puts them at 1.17× and 7.45× respectively. Over-valuing `W` makes the DP decline attempts it should make — the opposite error to the one §23.1 guards against, and just as costly. This was the second of the two changes required to resolve FINDING-P8-01.
+
+### ADR-064 · 2026-08-29 · scikit-learn for the V1 models
+**Decision:** Add `scikit-learn` — `HistGradientBoostingClassifier` for §21's V1 hazard, `IsotonicRegression` for its weekly recalibration, `log_loss` for the exit criterion.
+**Options:** scikit-learn; LightGBM; hand-rolled boosted stumps.
+**Rationale:** §21 specifies "V1 is a gradient-boosted discrete-time hazard" by name. the project's rule is against adding a dependency "to avoid writing twenty lines"; a boosted tree ensemble is not twenty lines, and ADR-047's reasoning does not extend here — that declined `scipy` because every statistic was two-arm and had an exact closed form. One dependency covers the whole of Phase 11's modelling need. LightGBM would still have needed scikit-learn or a hand-roll for isotonic, so likely two. A hand-rolled learner losing to a lookup table would fail "V1 beats V0" for an implementation reason rather than a real one.
+
+### ADR-065 · 2026-08-29 · Per-cause code-05 masking (resolves ADR-035)
+**Decision:** Each latent cause masks as "05" at its own rate, scaled by `mask_05_rate` so the robustness sweep's 0.0/1.0 extremes keep their meaning. `no_funds` weighted down, issuer-side causes up.
+**Options:** several causes masquerade, tuned to ~50%; raise `fraud_hold` only; lower `no_funds` only.
+**Rationale:** §20 calls 05 "the least informative signal in payments, with roughly half being insufficient funds in disguise", but only `no_funds` and `fraud_hold` reached the bucket and unfunded accounts dominate the failure population — so 05 was **95.4% `no_funds`**, a mixture with one component that EM cannot learn from. That was ADR-035, open since Phase 4, and it would have made Phase 11's artifact — "a confusion matrix for latent-cause inference" — look excellent while demonstrating nothing. "Do Not Honor" is what an issuer returns when it will not itemise a refusal, so the issuer-side causes belong in the bucket most.
+**Measured (n=3,061 at 40k cycles):** the 05 population is a genuine four-component mixture — **55% `no_funds`**, 26% `fraud_hold`, 15% `limit_breach`, 4% `issuer_degraded`, against §20's "roughly half". Was 95.4% `no_funds`. Re-tuned after ADR-067 corrected outage duration: the weight was briefly set against the day-long-outage population, which flattered `issuer_degraded`'s share.
+
+### ADR-066 · 2026-08-29 · Isotonic calibration from scikit-learn
+**Decision:** Use `sklearn.isotonic.IsotonicRegression` for §21's weekly recalibration.
+**Options:** scikit-learn's; hand-rolled PAVA; rely on the GBM's native probabilities.
+**Rationale:** Free once ADR-064 lands, and it handles the edge cases a first hand-roll gets wrong — ties, out-of-range inputs at predict time, monotone extrapolation at the boundary. §21 is explicit that "calibration is the property that matters, not AUC" and that the sequencer "consumes these probabilities as expected rupees", so this is a poor place to carry avoidable risk. Relying on native GBM probabilities would leave a stated requirement unbuilt.
+
+### FINDING-P11-01 · 2026-08-29 · ⚠️ MECHANISM RESOLVED (ADR-075) — the sequencer's objective was monotone in time, so no liquidity model could change a decision
+
+**Observed.** V1 and V0, served through the identical loop, produce **byte-identical decisions** on all 3,948 treatment cycles: one attempt, always at slot 167, the last legal slot in the 7-day dunning window. End-to-end incremental lift is **+0.00%**, despite V1 beating V0 by **16.8% on held-out log-loss**.
+
+**First cause, since fixed (ADR-072).** `revocation_delta()` and `health_multiplier()` were still the flat stubs their own docstrings flagged — "Phase 10 changes the values" and "neutral until Phase 11". Phase 10 built the time-dependent `Δr` (ADR-062) but wired it only into `prayas/retention/`; the sequencer never received it. Now wired. It moved the decision on a minority of cycles (5 → 13 distinct slots chosen) but did not change the lift.
+
+**Root cause, still open.** §23.2's conditional
+
+    p(t | t_last) = 1 − S(t)/S(t_last)
+
+is **monotone non-decreasing in `t`**, because `S` is non-increasing. A single attempt's success probability is therefore maximised at the largest legal slot, whatever shape the hazard curve has. The only counterweights are `cost[b][t]` and `Δr[t]·W`, and measured on the real population the gain from waiting to the last legal slot is a median **₹1,418** against a median cost of **₹422** — waiting wins on **100%** of cycles. The curve's *shape* is not an input to the decision; only its value at the last legal slot is.
+
+**An oracle bound settles what this costs, and it is the clearest evidence in the finding.** For each failed cycle, ask whether *any* legal slot holds money — the ceiling for any policy with at least one attempt:
+
+| dynamics | oracle | fire at first legal slot | fire at last legal slot | sequencer achieves |
+|---|---|---|---|---|
+| absorbing (default) | **66.40%** | 8.40% | **66.40%** | 65.65% |
+| non-absorbing (§21's own) | **76.04%** | 34.68% | 31.86% | ~31.5% |
+
+Under absorbing funding, waiting to the last legal slot **is** the oracle — 66.40% against 66.40%. There is no headroom at all, so **+0.00% incremental lift is the correct answer, not a modelling failure.** V1 could be perfect and still not beat V0 here, because the optimal policy does not consult a hazard curve.
+
+Under §21's own non-absorbing dynamics the picture inverts: the ceiling is **76.04%** and the sequencer reaches **~32%**, leaving **44 percentage points** unexploited. Firing at the *first* legal slot beats firing at the last (34.68% vs 31.86%), so the ordering the absorbing formulation is built on is simply wrong there. This is the regime a liquidity model exists for, and the one §23.2 cannot express.
+
+**The DP is not broken.** It responds correctly whenever the economics genuinely differ: given a curve with two separated hazard spikes it chooses **two** attempts, `[141, 166]`, one at each.
+
+**The inconsistency.** §21 states plainly that "funding is not strictly absorbing — money arrives and is spent", and names "validation against simulator configurations with explicitly non-absorbing dynamics" as the mitigation. §23.2's DP assumes the opposite. Both cannot hold.
+
+**Not a regression.** Phase 8's +44.2% is unaffected and remains what it always measured: a competent lawful baseline versus maximal legal patience. What it does *not* measure is liquidity timing.
+
+**Resolved as a mechanism by ADR-075**, approved as a Class A spec deviation on 2026-08-29: the DP may now consume `P(funds present at t)`, which is not monotone and therefore *can* express "attend to this customer's payday". Under §21's own non-absorbing dynamics that lifts recovery from **31.43% to 40.91%** with V0 alone — a **+9.5 pp** gain attributable to the formulation, not to any model. Under absorbing funding §23.2 remains very nearly optimal (65.40% against a 65.34% ceiling) and stays the default; the finding was never that §23.2 is wrong, only that it is wrong *for the dynamics §21 describes*.
+
+**§21's leak was tried first, and it does not close this (ADR-074).** It was the cheaper option and the spec-sanctioned one, so it went first. V1 does beat V0 robustly at `leak_per_day ≥ 1.5` (+1.41 pp ± 0.26 across three seeds), but at the *physically correct* rate — 0.70/day, whose implied 34.3-hour dwell matches the simulator's published 36 — the leak makes V0 collapse to −12.70% and leaves V1 12.63 pp **worse** than no leak. The rates that produce a passing number imply dwells two to four times shorter than the generative parameter. The knob is forcing early attempts, not representing leakage, and claiming the criterion on it would be selecting a parameter to fit a target.
+
+**Blocked on a Class A decision.** Letting the DP consume `P(funds present at t)` instead of §23.2's absorbing conditional is a deviation from a spec section, which the project's decision protocol reserves for the owner.
+
+### FINDING-P11-02 · 2026-08-29 · OPEN — a better-calibrated hazard model does not produce a better outcome
+
+**Observed.** With ADR-075's presence formulation in place — so timing *can* change a decision, and does — and ADR-076's segment prior wired in, V1 still does not beat V0 end to end. Ten paired seeds, 8,000 cycles each, `non_absorbing`, identical populations and economics for both arms:
+
+| seed | V0 lift | V1 lift | Δ |
+|---|---|---|---|
+| 4242 | +21.51% | +21.03% | −0.48% |
+| 909 | +20.03% | +26.49% | **+6.45%** |
+| 1717 | +21.72% | +21.91% | +0.19% |
+| 5150 | +20.91% | +20.94% | +0.03% |
+| 88 | +17.41% | +17.39% | −0.03% |
+| 31337 | +19.37% | +16.40% | **−2.97%** |
+| 2718 | +18.70% | +20.43% | +1.73% |
+| 1618 | +19.18% | +21.15% | +1.97% |
+| 6022 | +20.83% | +22.07% | +1.25% |
+| 1414 | +18.00% | +20.01% | +2.00% |
+
+**V0 +19.77% ± 1.48% (39.97% recovery) · V1 +20.78% ± 2.73% (40.98%) · paired Δ +1.014% ± 2.425% sd, SE 0.767%, t = 1.32, 95% CI [−0.721%, +2.749%], 7/10 positive.**
+
+The interval includes zero, so this does not survive ADR-053's strict rule. ADR-076's prior did help — Δ moved from +0.646% (n=5, constant prior) to +1.014% — but not enough to separate the models.
+
+**Why this matters more than a failed criterion.** V1 beats V0 by **16.8% on held-out log-loss** at an ECE of 0.0017. That advantage is real and reproducible, and it does not reach the money. The Playbook anticipated exactly this — "V1 beats V0 on held-out log-loss **and** on end-to-end incremental lift — *the second is the one that counts*" — and the second does not hold.
+
+**What does move the number is the formulation, not the model.** V0 under ADR-075 achieves **+19.77%** lift and **39.97%** recovery against roughly **+12%** and **31.4%** under §23.2. Changing what the DP optimises was worth about **+8.5 pp of recovery**; changing the model feeding it was worth **+1.0 pp, indistinguishable from zero**.
+
+**What it would take to settle it.** At the observed effect size and variance, 80% power needs roughly **45 seeds** — about four hours of compute at this configuration. That is the honest price of converting "not demonstrated" into "demonstrated" or "refuted", and it is recorded here rather than being quietly approximated by a longer run that happened to land favourably.
+
+**Ruled out as explanations:**
+- *Sequencer under-using its budget.* No — given three genuine funding windows the DP fires at all three (`[40, 80, 130]`), at every continuation value from `W = 1×A` to ADR-036's `12×A`, and the legal window fits six attempts at the 25-hour notice lead.
+- *A wasted prior column.* Fixed in ADR-076 and re-measured; it improved the point estimate without changing the verdict.
+
+**Still open:** the gap to the oracle is **40.98% against 75.20%**. The DP aims correctly at whatever windows it is shown, so the remaining headroom is **presence-prediction quality** — the model is not locating each customer's funding windows sharply enough. That is the Phase 12 memory subsystem's territory, and it is where this thread continues.
+
+### ADR-067 · 2026-08-29 · Issuers are shared, and outages have real durations
+**Decision:** Add an issuer roster to the simulator. Outage windows are drawn per *issuer* from a stream keyed on the seed alone, at minute resolution, and every customer banking there sees the same outage.
+**Options:** shared issuer calendar; keep per-cycle draws and skip the nowcast; synthesise a separate attempt stream only for nowcast tests.
+**Rationale:** Each cycle drew its own private outage calendar, so no two cycles could ever agree the issuer was down. That made §20's `peer_success_rate` — "other customers, same issuer, same 5-min window" — uncomputable, and left Phase 11's nowcast criterion with no population-level event to detect. Durations were also rounded up to whole days, erasing the timescale §38 specifies (`LogNormal(4.0, 0.8)` *minutes*, a ~54-minute median) and the one the nowcast must resolve. Keying the calendar on the seed rather than the population size preserves ADR-029's prefix property, verified: a 5-cycle run and a 6,000-cycle run agree on cycle ids and issuer states.
+**Consequence:** issuer outages are now genuinely rare in time (~0.3% of cycles) but affect everyone at once when they happen — which is what makes them detectable, and why ADR-065's weights were re-tuned against the corrected population.
+
+### ADR-068 · 2026-08-29 · EM trains on the outcome and serves without it
+**Decision:** The mixture likelihood factorises into a context part and an outcome part. Training uses both; `predict_proba` drops the outcome factor.
+**Options:** factorised likelihood with serve-time marginalisation; context-only throughout; outcome as an ordinary feature.
+**Rationale:** §20 says "the eventual outcome is a noisy label for the latent cause: clearing two days later at the same amount on day-of-month 1 indicates `no_funds`; clearing five minutes later on a different route indicates `issuer_degraded`". That outcome exists at training time and cannot exist at decision time — the point is to decide *before* retrying. Treating it as an ordinary feature would post excellent offline numbers and fail in production, the exact failure §43 pages on. Dropping it entirely would discard the strongest training signal §20 names. Marginalising is the principled middle and is structural here: `predict_proba` takes contexts, so there is no channel an outcome could arrive through.
+
+### ADR-069 · 2026-08-29 · The residual causes depend on observables
+**Decision:** `limit_breach` probability rises with the debit's size relative to a stable per-customer ceiling; `fraud_hold` rises with a stable per-customer propensity that surfaces through §20's `sibling_failure_rate`. The total residual failure probability is unchanged.
+**Options:** tie both to observables; tie only `limit_breach`; leave as-is and report the artifact with the limitation stated.
+**Rationale:** Both were drawn from a bare uniform roll — independent of amount, of the customer, of everything. §20 asserts the opposite: `amount / p75(customer successful debits)` discriminates `limit_breach`, and `sibling_failure_rate` "rules customer-side in". So every model was being asked to recover a signal the simulator had deleted, and the confusion matrix would have measured the simulator's arbitrariness rather than the model's skill — ADR-035's defect wearing different clothes. A first attempt tied `fraud_hold` to `n_concurrent_mandates`, which is a config constant, and reproduced the same bug exactly; a per-customer propensity was needed to give it an observable footprint.
+**Measured:** EM's `fraud_hold` recall on code 05 went from **0% to 48%** at 54% precision — a cause the V0 heuristic never predicts even once.
+
+### ADR-070 · 2026-08-29 · Content-addressed model registry, relative drift thresholds
+**Decision:** Version ids are a hash of kind, hyperparameters, ordered feature names and a training-set fingerprint of counts only. Promotion is separate from registration; `rollback` returns to the previous pin or to none. Drift is PSI per feature plus ECE, reported independently.
+**Options:** content addressing; incrementing counters; timestamps.
+**Rationale:** §32's replay must reconstruct which model produced a decision, and a counter lets two different models share a version after a bad deploy — the one thing a registry exists to prevent. `fitted_at` is excluded from the hash because two identical fits on identical data *are* the same model, and including the clock would make every refit look like a change and drown a real one. The fingerprint carries counts only, so Invariant 8 and §27's floor are respected. PSI and ECE are both reported because neither implies the other: PSI cannot see a badly calibrated model, and ECE cannot see drift coming until outcomes mature — a month, at a 30-day horizon.
+
+### ADR-071 · 2026-08-29 · The harness takes a hazard provider
+**Decision:** `run_batch` accepts a `HazardProvider` returning a per-cycle curve, defaulting to Phase 8's shared population curve. V1 and V0 are served through the identical loop — same gate, same budget, same legal mask, same scoring.
+**Options:** provider seam; a parallel V1 harness; swap the model inside `empirical_hazards`.
+**Rationale:** Phase 11's exit criterion compares two models end to end. A parallel harness would make any difference a fact about the harness rather than about the models. Band-level hazards are expanded onto the hourly grid through the survival identity `h_hour = 1 − (1 − h_band)^(1/k)` rather than by dividing by the hour count, which would understate early hours and overstate late ones — exactly where a stopping decision lives.
+
+### ADR-072 · 2026-08-29 · Wire §22's Δr and §20's health into the sequencer
+**Decision:** `revocation_delta` takes an optional fitted `RevocationModel` and §22 features and returns the risk accrued by *waiting* to slot `t`; `health_multiplier` takes an optional nowcast and suppresses slots before a predicted issuer recovery. Both fall back to ADR-037/ADR-039's constants, so existing callers are unchanged. `run_batch` gains an `EconomicsProvider` seam beside ADR-071's `HazardProvider`.
+**Options:** wire both; wire Δr only; leave both stubbed and carry FINDING-P11-01.
+**Rationale:** Approved as a Class A on 2026-08-29. Both stubs' docstrings already promised this ("Phase 10 changes the values", "neutral until Phase 11"), and leaving them would have shipped the V1 hazard and the nowcast with no consumer. Health *suppresses* rather than zeroes a degraded issuer's slots: an outage is a raised failure rate, not a closed shutter, and a zero would make the DP treat those slots as unreachable rather than poor.
+**Bug found while wiring:** the economics provider was first given the failed-cycle *training split* as history, so no customer's successful cycles were visible — `successful_cycles` was 0 for all 2,000 sampled cycles and `Δr` collapsed to a single shared array. It now receives the full population, filtered to `due_at <` the cycle in hand, which is observable history and not leakage. After the fix the features span 21 distinct §22 cells.
+**Measured:** decisions changed on a minority of cycles (5 → 13 distinct slots), lift unchanged. See FINDING-P11-01 for why.
+
+### ADR-073 · 2026-08-29 · Funding windows — money arrives *and is spent*
+**Decision:** Ground truth carries `funding_windows`, half-open intervals in which the account actually held money. Absorbing (the default) yields one open-ended window — exactly the old behaviour expressed as an interval. `non_absorbing` yields one bounded window per payday, of `funds_dwell_hours` (default 36).
+**Options:** implement the windows; leave `non_absorbing` as-is and state the limitation; add intra-horizon discounting instead.
+**Rationale:** §21 names non-absorbing funding as its stated limitation and requires "validation against simulator configurations with explicitly non-absorbing dynamics". `non_absorbing` existed but only perturbed whether the account was funded at day 0 — money never left, so an attempt at *any* time at or after the funding instant succeeded and no retry could ever miss. That made timing provably irrelevant. Intra-horizon discounting was rejected as inventing a parameter: §23.1's δ is per *cycle*, not per hour.
+**Blast radius: none by default.** `funds_present()` reduces to `slot >= funding_slot` when windows are absorbing, so every closed phase's number is byte-identical — 683 unit tests pass unchanged.
+**Measured:** under `non_absorbing=True`, treatment recovery falls from **65.6% to 31.5%**, quantifying what §21's limitation actually costs.
+
+### ADR-074 · 2026-08-29 · §21's leak parameter, and why it is only an approximation
+**Decision:** Implement `leaky_survival(hazards, leak_per_day=...)`, discounting hazard by elapsed time from the due date. Threaded through `survival_from` → `treatment_slots` → `run_batch`. **Default 0.0**, so every closed phase's numbers are untouched.
+**Options:** discount by elapsed time (chosen); the true per-arrival leak; no leak at all.
+**Rationale:** §21 names "a leak parameter decaying survival over long gaps" as the first of three mitigations for funding not being absorbing, so this is spec-sanctioned rather than a deviation — which is why it was tried before the §23.2 change that FINDING-P11-01 points at.
+
+**The true leak cannot be expressed here, and that is now a test rather than a claim.** The quantity wanted is `P(funds present at t)`: a sum over arrivals weighted by how long money survives the gap to the attempt. It *falls* once money leaves, so the implied survival array is non-monotone, and `dp._validate` rejects non-monotone survival by design (§23.2). `test_the_true_leak_is_non_monotone_and_the_dp_refuses_it` constructs it and asserts the refusal.
+
+**Known error direction, stated rather than discovered later.** Discounting by elapsed time penalises a late-funding customer even when the attempt would land immediately after their money arrives — exactly the case a liquidity model exists to catch. It pushes attempts earlier than the true leak would, and the error grows with `leak_per_day`. The docstring says so.
+
+**Measured — 3 seeds, 6,000 cycles each, `non_absorbing`, mean ± sd:**
+
+| `leak_per_day` | implied mean dwell | V0 lift | V1 lift | V1 − V0 | V1 vs no-leak |
+|---|---|---|---|---|---|
+| 0.00 | ∞ | +13.08% ± 1.09% | +13.04% ± 1.08% | **−0.04% ± 0.03%** | +0.00% |
+| **0.70** | **34.3 h — matches the simulator's 36 h** | **−12.70% ± 1.34%** | **+0.42% ± 7.95%** | +13.12% ± 9.10% | **−12.63%** |
+| 1.50 | 16.0 h | +14.02% ± 0.53% | +15.43% ± 0.73% | **+1.41% ± 0.26%** | +2.39% |
+| 2.50 | 9.6 h | +12.39% ± 0.98% | +15.01% ± 0.54% | **+2.62% ± 0.78%** | +1.97% |
+
+**Verdict: this does not earn the exit criterion, and it should not be used to claim it.** V1 does beat V0 robustly at `leak_per_day ≥ 1.5` — +1.41 pp at roughly five standard deviations across seeds. But the only *physically correct* value is 0.70, whose implied 34.3-hour dwell matches the simulator's published 36 hours, and there the leak is a disaster: V0 collapses to −12.70% and V1 is unstable (±7.95%) and **12.63 pp worse than no leak at all**. The settings that produce a passing number imply dwells of 16 and 9.6 hours — two to four times shorter than the generative parameter they are supposed to represent.
+
+So the knob is not modelling leakage at those values; it is forcing attempts earlier, and the liquidity model gets credit for a bias that was dialled in by hand. Choosing 1.5 because it reads well would be selecting a parameter to fit a target. Recorded as a negative result: **§21's leak, implemented within §23.2's constraints, cannot deliver the end-to-end criterion honestly.** That is the evidence that FINDING-P11-01's Class A needs deciding on its own terms.
+
+### ADR-075 · 2026-08-29 · **SPEC DEVIATION** — the DP may consume `P(funds present at t)`
+**Approved by the project owner on 2026-08-29 as a Class A decision.** This is a deviation from §23.2 as written, recorded as such.
+
+**Decision:** `dp.solve` takes exactly one of `survival` (§23.2 unchanged) or `presence` (`P(funds present at t')`). The presence path skips the monotonicity requirement, validates `[0, 1]` instead, and scores candidates by presence directly. §23.2's `survival` path is untouched and remains the default everywhere.
+
+**What §23.2 says, and why it cannot hold here.** §23.2 scores a candidate by `p(t' | t) = 1 − S(t')/S(t)`, and calls the conditioning on `t_last` "the subtlety most implementations miss". That is right *when funding is absorbing*. But `S` is non-increasing, so that expression is monotone in `t'` for **every** valid curve — the latest legal slot always weakly dominates, and the hazard curve's shape never reaches the decision. §21 states plainly that funding is *not* absorbing: "money arrives and is spent". Both sections cannot hold at once, and the measurements say which one gives way.
+
+**Evidence that §23.2's ordering is wrong under §21's own dynamics:**
+- Absorbing: firing at the last legal slot recovers **66.40%** against an oracle ceiling of **66.40%** — §23.2 is exactly optimal, and nothing here changes that path
+- Non-absorbing: the ceiling is **76.04%**, patience achieves **31.86%**, and firing at the *first* legal slot beats the last (**34.68%**) — the ordering is reversed
+- §21's own sanctioned mitigation was tried first and failed honestly (ADR-074): it only produces a passing number at a leak rate two to four times the simulator's published dwell
+
+**Trade-off accepted:** the conditioning on `t_last` is genuinely dropped on the presence path. A failure at `t` said the account was empty then; under absorbing funding that shifted the whole remaining curve, and under non-absorbing dynamics it says much less, because the next payday is a fresh event. Slots near `t` are the exception and remain the weakest part of the model.
+
+**Measured — 8,000 cycles, fitted `Δr` and nowcast health throughout:**
+
+| dynamics | formulation | model | lift | recovery | mean slot | distinct slots |
+|---|---|---|---|---|---|---|
+| non-absorbing (oracle **74.98%**) | survival §23.2 | V0 | +12.03% | 31.43% | 166.2 | 7 |
+| | survival §23.2 | V1 | +12.06% | 31.46% | 166.3 | 5 |
+| | **presence ADR-075** | V0 | **+21.51%** | **40.91%** | 55.0 | 143 |
+| | **presence ADR-075** | V1 | **+22.05%** | **41.44%** | 64.5 | 96 |
+| absorbing (oracle **65.34%**) | survival §23.2 | V0 | **+45.61%** | **65.40%** | 166.0 | 11 |
+| | survival §23.2 | V1 | +45.68% | 65.47% | 166.3 | 5 |
+| | presence ADR-075 | V0 | +4.60% | 24.39% | 61.5 | 143 |
+| | presence ADR-075 | V1 | +22.03% | 41.82% | 91.0 | 143 |
+
+**This is not a strict improvement, and must not be deployed as one.** The formulation has to match the dynamics:
+
+- **Under absorbing funding, §23.2 is very nearly optimal** — 65.40% against a 65.34% ceiling — and presence is far worse (41.82% at best). §23.2's monotone conditional carries a *structural* guarantee that later is always weakly better; presence throws that away and relies entirely on a model getting the shape right, so every prediction error becomes a lost recovery. Keeping §23.2 as the default is therefore correct, not merely conservative.
+- **Under §21's own non-absorbing dynamics the ranking inverts**, and presence adds **+9.5 pp of recovery** over survival before any model improvement at all (V0 survival 31.43% → V0 presence 40.91%).
+
+**On the absorbing `presence` V1−V0 gap of +17.43 pp:** not a model win worth citing. V0's `segment_priors` key is `(day_of_month, hour_band, ticket_band)` and contains no `day_offset`, so it structurally cannot represent "later is better" — the gap measures V0's key being unsuited to presence, and both presence variants remain far below survival in that regime.
+
+**Known weakness, not fixed.** The presence dataset passes a *constant* `segment_prior_hazard` (0.02), so that column carries no information on this path — it is a wasted feature rather than a wrong one. On the survival path it is V0's own estimate, which is what lets V1 nest V0. Giving presence an analogous per-`(day_offset, band)` empirical prior would likely help V1 most, and is the first thing to try if this path is pursued.
+
+**Pinned by** `tests/unit/test_dp_presence.py`: presence attends to a payday window, survival on the same information goes to the deadline, presence chooses the *larger* of two windows rather than the earlier, ADR-072's health suppression diverts to a second window rather than stopping, and §23.3's stop still fires when no legal slot holds money. `stopping_rationale` was extended to the presence path so §6's "click any recovered rupee and see why" holds on it too, and `test_no_model_can_cause_an_illegal_attempt` was extended to cover it — the deviation needs that guarantee most.
+
+### ADR-076 · 2026-08-29 · An empirical segment prior for the presence path
+**Decision:** `presence_prior()` computes empirical `P(funds present)` per `(day_offset, hour_band)` from the training split, and it feeds both the training features and the serving features on ADR-075's path.
+**Options:** empirical per-cell prior; keep the constant; drop the column entirely.
+**Rationale:** The first cut of the presence path passed a constant `0.02` in the `segment_prior_hazard` column, so it carried no information — a wasted feature rather than a wrong one, and worse, it removed the term that lets V1 *nest* V0 rather than compete from scratch. On the survival path that column is V0's own estimate, which is exactly why "V1 beats V0" there is a statement about added information. Dropping the column would have kept the two paths' feature vectors inconsistent and broken the registry's pinned `feature_names`.
+**Caught by** the test asserting the prior actually reaches the feature matrix, not merely that the function exists — the first attempt at this wiring silently did not apply, and a prior nobody reads is still a constant.
+
+**Known cost, not yet addressed.** The presence path builds features in a Python loop over ~143 legal hours per cycle, with a timezone conversion each, and does it three times over (prior, dataset, serving). That makes it roughly an order of magnitude slower than the survival path — measured at minutes per seed rather than seconds. Fine for offline evaluation, not fine for a request path. Vectorising `hourly_features` over the whole legal mask at once is the obvious fix and was deliberately left out of this change so it would not invalidate the measurement running against it.
 
 ## Spec errata found (documentation only, no code impact)
 - §18 cites "§34.4" for isolation-as-correctness; §34 is *Estimators* and has no subsections. Correct target is **§40.4**.
