@@ -6,9 +6,16 @@ the *conditional*, never the marginal. Using the marginal here is the single
 most likely error in the project (the modelling rules), so the conditional
 is computed in exactly one place and asserted against brute force.
 
-Stopping is `policy[b][t] == -1`, which happens precisely when every legal
-continuation has non-positive expected value (§23.3). There is no attempt-count
-rule anywhere in this module.
+Stopping is `policy[b][t] == -1`, which happens precisely when no legal
+continuation is worth more than keeping the mandate and collecting nothing
+(§23.3). There is no attempt-count rule anywhere in this module.
+
+**STOP is worth `W`, not zero (ADR-061).** §23.2 writes `max{0, ...}` while
+§23.1 pays `A + W` on success — incompatible baselines, which ADR-040 showed
+make §40.3's W-monotonicity false below `p ~ 3.85%`. Stopping does not destroy
+the mandate; it keeps it and collects nothing this cycle. With `V(0, .) = W`
+the attempt condition becomes "expected collection exceeds expected revocation
+damage", and monotonicity in `W` holds unconditionally.
 
 **Money stays integer paise.** Amounts are never cast to float; expected value
 is a probability-weighted statistic, not a money amount, and numpy promotes the
@@ -124,7 +131,9 @@ def solve(
     """
     horizon = _validate(survival, legal, cost, dr, health, budget, lead_slots, p_recoverable)
 
-    value = np.zeros((budget + 1, horizon), dtype=np.float64)
+    # ADR-061: the base case is the mandate's own value, not zero. A cycle
+    # with no attempts left still holds a live mandate.
+    value = np.full((budget + 1, horizon), float(continuation_value_paise), dtype=np.float64)
     action = np.full((budget + 1, horizon), STOP, dtype=np.int64)
 
     # Integer paise; numpy promotes during the probability arithmetic below.
@@ -155,8 +164,10 @@ def solve(
         best = np.argmax(ev, axis=1)
         best_ev = ev[slots, best]
 
-        take = best_ev > min_ev_paise
-        value[b] = np.where(take, best_ev, 0.0)
+        # ADR-061: continue only if it beats *keeping the mandate*, not zero.
+        floor = continuation_value_paise + min_ev_paise
+        take = best_ev > floor
+        value[b] = np.where(take, best_ev, float(continuation_value_paise))
         action[b] = np.where(take, best, STOP)
 
     return Policy(value=value, action=action)
@@ -184,7 +195,7 @@ def solve_reference(
     """
     horizon = _validate(survival, legal, cost, dr, health, budget, lead_slots, p_recoverable)
 
-    value = np.zeros((budget + 1, horizon), dtype=np.float64)
+    value = np.full((budget + 1, horizon), float(continuation_value_paise), dtype=np.float64)
     action = np.full((budget + 1, horizon), STOP, dtype=np.int64)
     total = amount_paise + continuation_value_paise
 
@@ -207,7 +218,7 @@ def solve_reference(
             )
 
             j = int(np.argmax(ev))
-            if ev[j] > min_ev_paise:
+            if ev[j] > continuation_value_paise + min_ev_paise:  # ADR-061
                 value[b][t] = ev[j]
                 action[b][t] = int(candidates[j])
 

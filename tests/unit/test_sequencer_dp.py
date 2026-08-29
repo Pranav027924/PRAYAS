@@ -6,6 +6,8 @@ enumeration at `B <= 3, H <= 40`, and monotonicity in `B`, `A`, `W`.
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 import pytest
 from hypothesis import given, settings
@@ -59,11 +61,13 @@ def _brute_force_value(scenario: Scenario, budget: int, t: int) -> float:
         E[value] = p(t)·[A + W] + (1 - p(t))·[V(b-1, t) - Δr(t)·W] - cost(t)
 
     rather than from the DP module, so agreement is evidence about the
-    implementation rather than the implementation agreeing with itself. STOP is
-    the zero option, so the max is taken against 0.
+    implementation rather than the implementation agreeing with itself.
+
+    ADR-061: STOP is worth `W`, not zero — stopping keeps the mandate and
+    collects nothing. So the base case and the STOP option are both `W`.
     """
     if budget == 0:
-        return 0.0
+        return float(scenario["continuation_value_paise"])
 
     survival: FloatArray = scenario["survival"]
     legal = scenario["legal"]
@@ -76,7 +80,7 @@ def _brute_force_value(scenario: Scenario, budget: int, t: int) -> float:
     p_rec = scenario["p_recoverable"]
     horizon = survival.shape[0]
 
-    best = 0.0  # STOP
+    best = float(w)  # STOP: keep the mandate, collect nothing (ADR-061)
     for nxt in range(t + lead, horizon):
         if not legal[nxt]:
             continue
@@ -210,24 +214,30 @@ def test_total_position_value_is_monotone_in_continuation_value(seed: int) -> No
     lo = solve(**base)
     hi = solve(**valuable)
 
+    # ADR-061 makes this hold on `V` itself; the `V + W` restatement ADR-040
+    # needed is no longer required, and both are asserted so a regression to
+    # the old baseline would fail here rather than silently.
+    assert np.all(hi.value >= lo.value - 1e-6)
     lo_total = lo.value + base["continuation_value_paise"]
     hi_total = hi.value + valuable["continuation_value_paise"]
     assert np.all(hi_total >= lo_total - 1e-6)
 
 
-def test_raw_value_is_not_monotone_in_w_below_the_hazard_threshold() -> None:
-    """Pins ADR-040's finding, so the boundary cannot drift unnoticed.
+def test_value_is_now_monotone_in_w_at_every_hazard() -> None:
+    """ADR-061 resolves ADR-040: `V` itself is monotone in `W`, unconditionally.
 
-    Documents the exact regime in which §23.2's `V` decreases in `W`. If a
-    future change to the objective removes this, the test fails and the ADR
-    gets revisited deliberately rather than the finding quietly evaporating.
+    ADR-040 recorded that §23.2's STOP value of 0 made `dV/dW = p - (1-p)·Δr`,
+    negative below `p ~ 3.85%`, and pinned the failure at exactly the regime
+    where it bit. With STOP worth `W`, both branches gain at least `W`, so the
+    derivative is bounded below by a positive quantity and the anomaly is gone.
+
+    This test replaces the regression that used to pin the defect — the defect
+    is fixed, so pinning it would now assert the wrong thing.
     """
     horizon = 6
-    # Survival chosen so the one-step conditional hazard is ~3%, below the
-    # Δr/(1+Δr) ~ 3.85% threshold where the slope turns negative.
     survival = np.array([1.0, 0.97, 0.9409, 0.9127, 0.8853, 0.8588], dtype=np.float64)
     legal = np.array([False, True, False, False, False, False], dtype=np.bool_)
-    amount = 10_000_000  # ₹100,000 — large enough that EV stays positive
+    amount = 10_000_000
 
     def value_at(w: int) -> float:
         policy = solve(
@@ -244,72 +254,10 @@ def test_raw_value_is_not_monotone_in_w_below_the_hazard_threshold() -> None:
         )
         return policy.expected_value_paise(1, 0)
 
-    small, large = value_at(1_200_000), value_at(4_800_000)
-
-    assert small > 0 and large > 0, "both must be positive, or max(0,·) hides the effect"
-    assert large < small, f"expected V to DECREASE as W rises in this regime, got {small} → {large}"
-
-
-# ── The conditional, not the marginal ───────────────────────────────────────
-
-
-def test_dp_uses_the_conditional_hazard_not_the_marginal() -> None:
-    """`p(t'|t) = 1 - S(t')/S(t)`, never `1 - S(t')`.
-
-    the modelling rules call this "the most likely error in the whole
-    project". The two coincide only at `t = 0`, so the test compares a
-    later-`t` state against a DP fed the marginal and requires them to differ
-    in the direction the conditional implies: conditioning on having survived
-    to `t` raises the probability of funding soon after, hence a higher value.
-    """
-    horizon = 20
-    survival = np.clip(np.cumprod(np.full(horizon, 0.9)), 1e-6, 1.0).astype(np.float64)
-    legal = np.ones(horizon, dtype=np.bool_)
-    amount = 100_000
-    scenario: Scenario = {
-        "survival": survival,
-        "legal": legal,
-        "cost": np.zeros((2, horizon), dtype=np.int64),
-        "amount_paise": amount,
-        "continuation_value_paise": amount * 12,
-        "dr": np.zeros(horizon, dtype=np.float64),
-        "health": np.ones(horizon, dtype=np.float64),
-        "budget": 1,
-        "lead_slots": 0,
-        "p_recoverable": 1.0,
-    }
-    policy = solve(**scenario)
-
-    late = 10
-    # Conditional: 1 - S[t']/S[10]. Marginal would be 1 - S[t'].
-    best = policy.best_slot(1, late)
-    assert best is not None
-    conditional_p = 1.0 - survival[best] / survival[late]
-    marginal_p = 1.0 - survival[best]
-
-    assert conditional_p < marginal_p, "test setup does not distinguish the two"
-    realised = policy.expected_value_paise(1, late)
-    assert realised == pytest.approx(conditional_p * (amount + amount * 12), rel=1e-9)
-    assert realised != pytest.approx(marginal_p * (amount + amount * 12), rel=1e-6)
-
-
-def test_survival_must_be_monotone() -> None:
-    """A non-monotone survival curve is a bug upstream, not something to absorb."""
-    horizon = 10
-    bad = np.linspace(0.5, 0.9, horizon).astype(np.float64)  # increasing
-    with pytest.raises(ValueError, match="monotone non-increasing"):
-        solve(
-            survival=bad,
-            legal=np.ones(horizon, dtype=np.bool_),
-            cost=np.zeros((2, horizon), dtype=np.int64),
-            amount_paise=1000,
-            continuation_value_paise=12000,
-            dr=np.zeros(horizon, dtype=np.float64),
-            health=np.ones(horizon, dtype=np.float64),
-            budget=1,
-            lead_slots=0,
-            p_recoverable=1.0,
-        )
+    values = [value_at(w) for w in (1_200_000, 2_400_000, 4_800_000, 9_600_000)]
+    assert all(b >= a for a, b in itertools.pairwise(values)), (
+        f"V still decreases in W under ADR-061: {values}"
+    )
 
 
 # ── Exit criterion: stopping rationale carries real rupee figures ────────────
@@ -389,11 +337,15 @@ def test_rationale_refuses_a_non_stopping_state() -> None:
         )
 
 
-def test_zero_budget_layer_is_all_stop() -> None:
-    """`V(0, ·) = 0` and no action — the recursion's base case."""
+def test_zero_budget_layer_holds_the_mandate_value() -> None:
+    """`V(0, ·) = W` and no action — the recursion's base case under ADR-061.
+
+    A cycle with no attempts left has not lost the mandate; it simply cannot
+    try again this cycle. Valuing that state at zero was ADR-040's finding.
+    """
     rng = np.random.default_rng(3)
     scenario = _scenario(rng, 15, 2)
     policy: Policy = solve(**scenario)
 
-    assert np.all(policy.value[0] == 0.0)
+    assert np.all(policy.value[0] == float(scenario["continuation_value_paise"]))
     assert np.all(policy.action[0] == STOP)

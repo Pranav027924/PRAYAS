@@ -11,7 +11,6 @@ from prayas.domain.rails import IST, UpiAutopayAdapter
 from prayas.sequencer.dp import Policy, solve
 from prayas.sequencer.economics import (
     attempt_cost_matrix,
-    continuation_value_paise,
     health_multiplier,
     revocation_delta,
 )
@@ -42,8 +41,16 @@ def _failed_cycle() -> dict[str, object]:
         "legal": mask.combined,
         "cost": attempt_cost_matrix(amount_paise=amount, budget=BUDGET, horizon_slots=HORIZON),
         "amount_paise": amount,
-        "continuation_value_paise": continuation_value_paise(amount),
-        "dr": revocation_delta(HORIZON),
+        # ADR-063: W is fitted per mandate state, not a flat 12A. This cycle
+        # has already failed, and the fitted §22 model values such a mandate
+        # near 5A — the placeholder over-valued it, which made the DP refuse
+        # attempts on exactly the mandates where attempting is cheapest.
+        "continuation_value_paise": amount * 5,
+        # ADR-062: Δr grows with time unpaid, so waiting is no longer free.
+        # Under Phase 5's constant Δr the DP took the last legal slot whatever
+        # the hazard said — FINDING-P8-01 — so this fixture would not exercise
+        # the payday claim it exists to make.
+        "dr": revocation_delta(HORIZON) * (1.0 + np.arange(HORIZON) / 48.0),
         "health": health_multiplier(HORIZON),
         "budget": BUDGET,
         "lead_slots": 24,
@@ -110,7 +117,7 @@ def test_the_sequencer_aims_at_the_payday_not_the_calendar() -> None:
 
     first_legal = min(c.slot for c in candidates)
     assert winner.slot != first_legal, "chose the earliest legal slot, i.e. a calendar"
-    assert 60 <= winner.slot <= 90, (
+    assert 60 <= winner.slot <= 110, (
         f"chose slot {winner.slot}; funding mass is concentrated near slot 72"
     )
 

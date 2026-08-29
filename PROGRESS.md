@@ -1,7 +1,7 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 10 — Retention subsystem (not started)
+Phase 11 — V1 models (not started)
 
 ## Phase status
 | # | Phase | Status | Closed on |
@@ -16,13 +16,27 @@ Phase 10 — Retention subsystem (not started)
 | 7 | Measurement plane | CLOSED | 2026-08-29 |
 | 8 | FIRST DEFENSIBLE NUMBER | CLOSED (with finding) | 2026-08-29 |
 | 9 | Notification optimizer | CLOSED | 2026-08-29 |
-| 10 | Retention subsystem | not started | — |
-| 11–19 | see Execution Playbook | not started | — |
+| 10 | Retention subsystem | CLOSED | 2026-08-29 |
+| 11 | V1 models | not started | — |
+| 12–19 | see Execution Playbook | not started | — |
 
 ## Exit criteria — current phase
-_Phase 9 closed. Phase 10 not yet started._
+_Phase 10 closed. Phase 11 not yet started._
 
 ## Closed phases
+
+### Phase 10 — Retention subsystem · closed 2026-08-29
+_Evidence 2026-08-29. **All five met.**_
+
+- [x] **Revocation model calibrated on simulated mandate deaths** — §22's `r(t)` fitted over its named features; **ECE 0.0009** on held-out mandates against Appendix C's 0.05 alert threshold. Monthly hazard rises monotonically 0.89% → 2.37% → 3.94% → 7.47% → 23.32% by consecutive failures. A deliberately miscalibrated model is asserted to *exceed* the threshold, so the metric cannot pass vacuously
+- [x] **LTV sequencer measurably more conservative** — same cycles, both objectives: the LTV version fires from strictly fewer states than recovery-only. The economics are now legible: continue iff `pA > (1−p)·Δr·W`
+- [x] **Survival curves per arm with a log-rank test** — Phase 7's Freireich-validated estimators on real simulated deaths, with censoring. Two draws of one process do not differ significantly (as they must not), and censored mandates are asserted *not* to be counted as deaths
+- [x] **Date-change proposals fire only when chronic and materially better** — §24.3's predicate transcribed exactly (`lift > 0.25 and chronic`), with both sides of each boundary asserted: the lift threshold is strict (0.25 does *not* fire), the chronic threshold inclusive (`>= 3`), and a material lift on a non-chronic mandate is refused as readily as a marginal lift on a chronic one. A day of month observed only twice cannot become the peak (§27's floor), so the proposal cannot invent its own lift
+- [x] **Back-off decisions recorded in the ledger with rationale** — §24.6's "record that doing nothing was chosen and why", asserted on the *persisted* record rather than the return value: hash-verified, replayable, rupee-denominated, naming the revocation hazard and fatigue that drove it, and carrying its candidate set so silence is reviewable against what it was chosen over. A back-off also carries its arm, since unarmed silence would vanish from the experiment
+
+- §23.4 upheld end to end: a hard stop beats an attempt worth 100x the mandate *and* a qualifying date change — an economic argument never overturns a legal one
+- §24's catalogue is complete: all six interventions named, with §24.4 (rail migration, Phase 14) and §24.5 (partial collection, needs an above-AFA-cap population) recorded as unavailable rather than silently absent
+- Gates: 759 tests, coverage 86.79% (floor 85), `mypy --strict prayas tests` clean (121 files), full `scripts/ci-local.sh` green
 
 ### Phase 9 — Notification optimizer · closed 2026-08-29
 
@@ -435,7 +449,25 @@ Each leaves Python to auto-inject the real builtins module. They survived becaus
 **Rationale:** If the audit's baseline and the control arm ever diverge, the published claim that "the default retry behaviour produces N violations per 10,000 cycles" would describe a policy the experiment never ran, and the two numbers become quietly incomparable. Importing Phase 2's shadow harness directly would guarantee they match but couple the measurement plane to the gate's audit tooling, so a change made for the report silently alters the control arm. One definition both cite keeps the coupling explicit.
 
 ### FINDING-P8-01 · 2026-08-29 · The lift does not come from the liquidity model
-**Status:** CARRIED TO PHASE 10 — three bugs found and fixed; the finding survives all three.
+**Status:** ✅ **RESOLVED 2026-08-29 in Phase 10.** For the first time in the
+project, the fitted hazard and an uninformative prior give **different**
+answers: the fitted curve attempts at day 6, the flat prior **stops**.
+
+**What it took — two changes, and neither alone was enough:**
+1. **ADR-062, time-dependent `Δr`.** With a constant Δr, waiting stayed free and
+   the latest legal slot still weakly dominated whatever the curve said. Pinned
+   by a regression test that restores a constant Δr and asserts the degeneracy
+   *returns* — so the cause is attributable rather than merely asserted.
+2. **ADR-063, `W` fitted per mandate state.** ADR-036's flat `12 × A` valued a
+   four-failure mandate at **10× its fitted worth** (12.0 vs 1.17), which made
+   the DP refuse attempts on exactly the mandates where attempting risks least.
+   Fitted, `W/A` ranges 7.45 (healthy) → 1.17 (four failures).
+
+Measured with the placeholder W and constant Δr, the two curves still agree —
+so the resolution is attributable to these two changes and not to the phase at
+large.
+
+**Original status:** CARRIED TO PHASE 10 — three bugs found and fixed; the finding survives all three.
 
 **Where the fix lands.** The root cause is that §23.1's objective charges for
 attempts but never for delay. Phase 10 builds §22's revocation hazard and
@@ -590,6 +622,27 @@ so there is an eve to aim at. That is a §38 modelling question, not a planner b
 **Decision:** The simulator models a notification response whose strength depends on **when** the notice lands. Published as `SimConfig` parameters and swept by the robustness suite.
 **Options:** timing-dependent response; fixed uplift regardless of timing; do not model it.
 **Rationale:** §24.2 states the mechanism directly — "A notice sent 72 hours early is forgotten. One sent at the 24-hour boundary, the evening before a salary credit lands, is acted on." A fixed uplift would make timing irrelevant *by construction*, reproducing FINDING-P8-01 exactly: a real number attached to a false mechanism claim. Not modelling it at all would make the prevention rate structurally zero and leave Phase 9's artifact without its artifact. Making the effect size a published, swept parameter means the result cannot rest on a flattering constant — if optimised timing fails to beat naive timing under it, that is a real negative result.
+
+### ADR-060 · 2026-08-29 · Mandate lifecycles with §22's time-hazard
+**Decision:** Mandates bill repeatedly (`seq_no`), and revocation is drawn from `r(t) = P(revoked at t | alive at t)` over §22's features. Gated behind `SimConfig.cycles_per_mandate`, defaulting to **1** so every closed phase's recorded numbers stay reproducible; Phase 10 opts in explicitly.
+**Options:** multi-cycle with §22 time-hazard; multi-cycle with per-failure Bernoulli; one cycle per mandate with synthesised deaths.
+**Rationale:** `revocation_beta` had been declared and validated since Phase 3 but **never used** — the simulator revoked zero mandates, so three Phase 10 criteria were unachievable. §22 lists "**days since last successful debit ↑**", a *time* feature: a mandate left unpaid grows likelier to die. That is the cost of waiting §23.1 lacks, and its absence is FINDING-P8-01's root cause. A per-failure Bernoulli would produce deaths but no time axis, leaving the finding untouched. Synthesised deaths would be uncorrelated with the attempt behaviour that supposedly caused them, making "calibrated on simulated mandate deaths" true in letter and empty in substance.
+
+### ADR-061 · 2026-08-29 · STOP's value becomes W (resolves ADR-040)
+**Decision:** `V(b,t) = max{W, continue}`, with `V(0,·) = W`. Stopping means keeping the mandate and collecting nothing.
+**Options:** STOP = W; keep STOP = 0 and assert on `V + W`; make it configurable.
+**Rationale:** ADR-040 established that §23.2's STOP value of `0` contradicts §23.1's `A + W` success payout, making §40.3's W-monotonicity false below `p ≈ 3.85%`, and deferred the fix here. The attempt condition becomes `pA − cost > W(1−p)Δr` — attempt only when expected collection exceeds expected revocation damage — and monotonicity then holds unconditionally rather than needing ADR-040's `V + W` restatement. Deferring was right then and acting is right now: Phase 10's own exit criterion is "**LTV sequencer is measurably more conservative**", so a shift toward stopping earlier is what this phase exists to produce and test. A configurable baseline was rejected because a money-path semantic behind a switch means "what does the sequencer do" has no single answer.
+**Deviation:** §23.2's `max{0, ...}` → `max{W, ...}`.
+
+### ADR-062 · 2026-08-29 · Δr becomes time-dependent (targets FINDING-P8-01)
+**Decision:** `Δr(t)` is the marginal increase in the fitted §22 hazard from attempting at `t`, replacing ADR-037's constant.
+**Options:** fitted time-dependent Δr; keep constant; constant baseline plus a time-varying term.
+**Rationale:** ADR-037 chose a constant *because* the simulator modelled revocation as a constant per failure — coherence between the DP's assumed process and the data's actual one. ADR-060 removes that premise: once the simulator models `r(t)`, holding Δr constant recreates the very mismatch ADR-037 existed to avoid, in the opposite direction. §23.1's notation `Δr(t)` always implied time-dependence. A blended constant-plus-varying term was rejected because it would leave the cause of any behavioural change unattributable — and attribution is exactly what Phase 10's conservatism criterion turns on.
+**This is the direct test of FINDING-P8-01:** if the fitted lift still matches an uninformative prior after this, the cause lies deeper than the objective.
+
+### ADR-063 · 2026-08-29 · `W` computed from the fitted revocation model
+**Decision:** `W = Σ δ^k · P(alive at k) · A_k · P(collect|alive)` with `P(alive at k)` from §22's fitted hazard, replacing ADR-036's flat `12 × A`.
+**Rationale:** ADR-036 derived 12× from Appendix C's δ and K under an *assumed* survival decay, because §22's model did not exist. It does now. The placeholder was not merely imprecise but wrong in a way that mattered: it valued a four-failure mandate identically to a healthy one, when the fitted model puts them at 1.17× and 7.45× respectively. Over-valuing `W` makes the DP decline attempts it should make — the opposite error to the one §23.1 guards against, and just as costly. This was the second of the two changes required to resolve FINDING-P8-01.
 
 ## Spec errata found (documentation only, no code impact)
 - §18 cites "§34.4" for isolation-as-correctness; §34 is *Estimators* and has no subsections. Correct target is **§40.4**.

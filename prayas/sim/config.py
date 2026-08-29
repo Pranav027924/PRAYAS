@@ -130,6 +130,13 @@ class SimConfig:
     #: models this: "one customer may hold mandates with several merchants".
     cycles_per_customer: int = 4
 
+    #: ADR-060 — cycles a mandate bills before the observation window closes.
+    #: Defaults to 1 so every closed phase's recorded numbers stay reproducible;
+    #: Phase 10 opts in. Above 1, mandates acquire a lifetime and can be revoked
+    #: by §22's hazard, which is what survival curves and the "chronic" test in
+    #: §24.3 need.
+    cycles_per_mandate: int = 1
+
     #: ADR-059 — P(customer tops up in time) for a perfectly-timed notice.
     #: §24.2: "One sent at the 24-hour boundary, the evening before a salary
     #: credit lands, is acted on."
@@ -157,6 +164,8 @@ class SimConfig:
             raise ConfigError("base_failure_rate must be a probability")
         if self.cycles_per_customer < 1:
             raise ConfigError("cycles_per_customer must be at least 1")
+        if self.cycles_per_mandate < 1:
+            raise ConfigError("cycles_per_mandate must be at least 1")
         if not 0.0 <= self.pdn_uplift_max <= 1.0:
             raise ConfigError("pdn_uplift_max must be a probability")
         if self.pdn_attention_decay_hours <= 0:
