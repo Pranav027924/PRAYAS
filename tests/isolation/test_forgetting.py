@@ -135,6 +135,58 @@ async def test_the_full_cascade(app_engine: AsyncEngine, two_tenants: tuple[str,
         )
 
 
+async def test_a_customers_own_words_do_not_survive_erasure(
+    app_engine: AsyncEngine, two_tenants: tuple[str, str]
+) -> None:
+    """ADR-081. `inbound_replies.raw_text` is customer-authored personal data.
+    A cascade that erased the profile while leaving the customer's messages
+    intact would have honoured the request in name only."""
+    tenant, _ = two_tenants
+    secret = "meri salary 90000 hai, 3 tarikh ko aati hai"
+
+    async with tenant_transaction(app_engine, tenant) as conn:
+        await _seed(conn, tenant)
+        await conn.execute(
+            text(
+                "INSERT INTO inbound_replies (reply_id, tenant_id, customer_ref,"
+                " received_at, raw_text, needs_human)"
+                " VALUES (:id, :t, :c, :now, :raw, true)"
+            ),
+            {
+                "id": f"{tenant}_reply",
+                "t": tenant,
+                "c": CUSTOMER,
+                "now": datetime.now(UTC),
+                "raw": secret,
+            },
+        )
+
+        result = await forget(conn, tenant, CUSTOMER, pepper=PEPPER)
+        assert result.replies_scrubbed == 1
+
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT raw_text, customer_ref, needs_human FROM inbound_replies"
+                    " WHERE reply_id = :id"
+                ),
+                {"id": f"{tenant}_reply"},
+            )
+        ).first()
+
+        assert row is not None, "the row itself is an operational record and stays"
+        assert row._mapping["raw_text"] == "", "the customer's words survived erasure"
+        assert row._mapping["customer_ref"] == result.pseudonym
+        assert row._mapping["needs_human"] is False, "a queued reply must leave the queue"
+
+        # And nothing anywhere still holds the text.
+        remaining = await conn.scalar(
+            text("SELECT count(*) FROM inbound_replies WHERE raw_text LIKE :like"),
+            {"like": "%90000%"},
+        )
+        assert remaining == 0
+
+
 async def test_forgetting_is_idempotent(
     app_engine: AsyncEngine, two_tenants: tuple[str, str]
 ) -> None:

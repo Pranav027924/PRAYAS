@@ -8,6 +8,11 @@
     pseudonymise_ledger      <- not delete
     exclude_from_training
 
+ADR-081 adds one §28 does not name because the table did not exist when it was
+written: `inbound_replies` holds the customer's own words. Its content is
+scrubbed and its reference pseudonymised — the fact of a reply is an
+operational record, the text is not.
+
 **Why the ledger is pseudonymised rather than deleted.** §28 says it plainly:
 "Financial transaction records carry statutory retention obligations, and an
 audit trail with holes is not an audit trail. The resolution is to sever the
@@ -109,6 +114,7 @@ class ForgetResult:
     pseudonym: str
     profiles_deleted: int
     mandates_pseudonymised: int
+    replies_scrubbed: int
     suppression_written: bool
     at: datetime
 
@@ -164,11 +170,27 @@ async def forget(
         {"t": tenant_id, "cust": customer_id},
     )
 
+    # 4. Strip the customer's own words (ADR-081). `inbound_replies.raw_text` is
+    #    customer-authored personal data held so a reviewer can see what
+    #    arrived. The *fact* of a reply is an operational record worth keeping —
+    #    it explains why a profile looks as it does — but the content is not,
+    #    so the text goes and the reference is pseudonymised. Same reasoning as
+    #    the ledger, applied to a table with no retention obligation attached.
+    replies = await conn.execute(
+        text(
+            "UPDATE inbound_replies SET raw_text = '', customer_ref = :ref,"
+            " needs_human = false, resolved_at = COALESCE(resolved_at, :at)"
+            " WHERE tenant_id = :t AND customer_ref = :cust"
+        ),
+        {"t": tenant_id, "ref": pseudonym, "cust": customer_id, "at": at},
+    )
+
     return ForgetResult(
         tenant_id=tenant_id,
         pseudonym=pseudonym,
         profiles_deleted=profiles.rowcount or 0,
         mandates_pseudonymised=mandates.rowcount or 0,
+        replies_scrubbed=replies.rowcount or 0,
         suppression_written=True,
         at=at,
     )

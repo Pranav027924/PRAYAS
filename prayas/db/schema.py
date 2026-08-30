@@ -43,6 +43,12 @@ TENANT_SCOPED_TABLES: Final[frozenset[str]] = frozenset(
         # ADR-078. §28's suppression must outlive the profile deletion that
         # triggers it, so it cannot be a flag on `customer_profiles`.
         "contact_suppressions",
+        # ADR-081. §41.2's human queue. Holds customer-authored text, so it is
+        # personal data and falls under §28's forgetting.
+        "inbound_replies",
+        # ADR-082. Inert by construction: the gate loads `compliance_rules`
+        # only, and nothing promotes a row from here to there.
+        "rule_proposals",
     }
 )
 

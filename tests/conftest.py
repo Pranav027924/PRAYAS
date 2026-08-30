@@ -121,6 +121,22 @@ async def _seed_tenant(conn: AsyncConnection, tenant: str) -> None:
         ),
         params,
     )
+    # ADR-081 / ADR-082.
+    await conn.execute(
+        text(
+            "INSERT INTO inbound_replies (reply_id, tenant_id, customer_ref, received_at,"
+            " raw_text) VALUES (:t || '_r1', :t, :t || '_cust', :now, 'salary 5 tarikh')"
+        ),
+        params,
+    )
+    await conn.execute(
+        text(
+            "INSERT INTO rule_proposals (proposal_id, tenant_id, proposed_at, source_text,"
+            " proposed_rule) VALUES (:t || '_p1', :t, :now, 'no debits on sundays',"
+            " '{}'::jsonb)"
+        ),
+        params,
+    )
     await conn.execute(
         text(
             "INSERT INTO decisions (decision_id, tenant_id, chain_seq, prev_hash,"
@@ -163,7 +179,8 @@ async def _truncate_all(conn: AsyncConnection) -> None:
     await conn.execute(
         text(
             "TRUNCATE sim_ground_truth, webhook_secrets, experiment_config, outbox, scheduled_actions,"
-            " decisions, contact_suppressions, customer_profiles, interventions, attempts,"
+            " decisions, rule_proposals, inbound_replies, contact_suppressions,"
+            " customer_profiles, interventions, attempts,"
             " cycles, mandates, events_raw, tenants RESTART IDENTITY CASCADE"
         )
     )
