@@ -1,7 +1,7 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 16 — Console
+Phase 17 — Live integration
 
 ## Phase status
 | # | Phase | Status | Closed on |
@@ -22,13 +22,30 @@ Phase 16 — Console
 | 13 | LLM layer | CLOSED (with finding) | 2026-08-30 |
 | 14 | Multi-rail | CLOSED | 2026-08-30 |
 | 15 | Hardening | CLOSED | 2026-08-30 |
-| 16 | Console | not started | — |
-| 17–19 | see Execution Playbook | not started | — |
+| 16 | Console | CLOSED | 2026-08-30 |
+| 17 | Live integration | not started | — |
+| 18–19 | see Execution Playbook | not started | — |
 
-## Exit criteria — current phase (Phase 16 — Console)
+## Exit criteria — current phase (Phase 17 — Live integration)
 _See the Execution Playbook. Not yet planned._
 
 ## Closed phases
+
+### Phase 16 — Console · closed 2026-08-30
+_Evidence 2026-08-30. **Four of four met.** CI mirror green: 1,269 tests, 89.81% coverage, `mypy --strict` on 182 files, bandit clean. Goal: "three purposeful screens. Not a dashboard."_
+
+- [x] **Replay renders any decision including denied ones** — parametrised over ALLOW and DENY, in JSON and HTML. The denial is the case that matters: §5 gives the compliance reviewer one job, "prove this action was lawful when it fired", and a screen rendering only successes could not answer it. Rejected candidates and rule citations render for both
+- [x] **Simulator recomputes 1,000 cycles in under 2 seconds** — measured. The Playbook budgeted for "the DP costs 8 ms"; after Phase 15's suffix-scan fix it is under 1 ms, so the screen is more responsive than the phase was designed around
+- [x] **Guardrails displayed with equal prominence to headline metrics** — asserted *structurally*, at the same nesting level as the headline rather than under a key a template can forget. A report without guardrails raises rather than rendering, and a breach falsifies the headline instead of sitting beside it
+- [x] **RBAC enforced per screen** — every role × every screen, in **both directions**. A test checking only the permitted case would pass against a system that permits everything
+
+**Artifact — screen 2.** Click one recovered rupee and see the whole chain: verdict, every candidate considered with its EV, the chosen one, each compliance rule with its version and citation, the experiment arm and propensity, and whether the record's hash still matches.
+
+**The tenant is never a request parameter.** §18 requires it to come "from a verified token. NEVER from a request parameter, query string, or header the client controls" — so it is in the token, no console route path contains `tenant`, and reading another tenant's decision requires forging a signature rather than guessing an id. Asserted directly.
+
+**Open findings carried:** FINDING-P9-01, FINDING-P8-01 (partially resolved), FINDING-P11-01 (mechanism resolved by ADR-075), FINDING-P11-02, FINDING-P13-01.
+
+
 
 ### Phase 15 — Hardening · closed 2026-08-30
 _Evidence 2026-08-30. **Five of five met.** CI mirror green: 1,193 tests, 89.71% coverage, `mypy --strict` on 176 files, bandit clean. Goal: "operable by one person at 3am."_
@@ -1106,6 +1123,20 @@ Five tests caught it, and **only on a clean build** — they passed in isolation
 ### ADR-086 · 2026-08-30 · bandit, with findings triaged individually
 **Decision:** `bandit` over `prayas/` in both CI paths. Tests excluded — they construct hostile payloads deliberately, and a scanner flagging those trains people to ignore the report. `B101` skipped as a category (type-narrowing asserts after explicit guards). Every other finding annotated at its own line with its own reason.
 **Rationale:** Seven findings, all genuine false positives, but for two different reasons — and a blanket skip would have hidden that difference. The interesting one is `B307` on the gate's `eval`: it is a *considered* eval, not an oversight, and the annotation says why (the AST is whitelist-validated before compilation and `__builtins__` is emptied, so the tree provably contains no reachable call outside `ALLOWED_FUNCS`). `B608` is annotated per line rather than skipped globally, so it can still catch a genuine injection later.
+
+### ADR-087 · 2026-08-30 · Signed bearer tokens carry the tenant
+**Approved 2026-08-30.** **Decision:** Console principals authenticate with an HMAC-signed token carrying `tenant_id`, `role` and an expiry. Roles are §5's five personas; `PERMISSIONS` maps screens to roles and denies by default. `PRAYAS_CONSOLE_TOKEN_SECRET` is required — absent means refuse.
+**Options:** signed tokens; an `api_keys` table; OIDC/JWT via a library.
+**Rationale:** §18 requires `app.tenant_id` to come "from a verified token. NEVER from a request parameter, query string, or header the client controls." Putting the tenant *in* the token makes that binding a property of authentication rather than of whoever remembered to pass it along — **no console endpoint takes a `tenant_id`**, so reading another tenant's data requires forging a signature rather than guessing an identifier. Signed rather than encrypted: the contents are not secret, forgery is what must be impossible, and encrypting would imply a confidentiality property that does not exist. No new dependency (`hmac`, `hashlib`).
+**Fails closed at every step**, and a 401 says only "authentication failed": distinguishing "no such tenant" from "bad signature" tells a prober which half to keep working on.
+**Compliance reviewers are tenant-scoped** (approved option). A platform reviewer binds one tenant at a time and each binding is a separate act — no exception to Invariant 6, and no `SECURITY DEFINER` hole opened for convenience.
+
+### ADR-088 · 2026-08-30 · The policy simulator cannot act
+**Decision:** `prayas/console/simulator.py` imports the DP and the cost model and **nothing that writes** — no executor, no ledger, no notifier, no `AsyncConnection` in any signature. Simulations run against a synthetic, seeded population, capped at 5,000 cycles per request.
+**Rationale:** Recomputing what a policy *would* do is a different act from doing it, and on a system that moves money the difference should be visible in the import list rather than promised in a docstring. Asserted as absence of capability the way ADR-082 did for rule proposals — a guarantee resting on a check can be bypassed by a caller who forgets to check.
+**Synthetic population on purpose:** the screen answers "how would the policy behave", not "what would happen to these customers". The second question invites reading live data into a screen whose whole guarantee is that it cannot act on it.
+**Capped on purpose:** §41.1's T9 is denial of wallet, and an uncapped `cycles` parameter is the cheapest way for a caller to spend someone else's CPU.
+**Measured:** the Playbook budgets for "the DP costs 8 ms". After Phase 15's suffix-scan fix it is under 1 ms, so 1,000 cycles complete far inside the two-second criterion — the screen is more responsive than the phase was designed around.
 
 ## Spec errata found (documentation only, no code impact)
 

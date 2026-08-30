@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Decision {{ d.decision_id }}</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem auto; max-width: 60rem; color: #111; }
+  h1 { font-size: 1.2rem; } h2 { font-size: 1rem; margin-top: 1.6rem; }
+  table { border-collapse: collapse; width: 100%; margin: .4rem 0; }
+  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #e5e5e5; }
+  th { font-weight: 600; color: #444; }
+  .deny { color: #a00; font-weight: 600; } .allow { color: #060; font-weight: 600; }
+  .chosen { background: #f4f8ff; } .flag { color: #a60; }
+  code { font: 12px ui-monospace, monospace; }
+</style>
+
+<h1>Decision <code>{{ d.decision_id }}</code></h1>
+<p>
+  <span class="{{ 'allow' if d.verdict == 'ALLOW' else 'deny' }}">{{ d.verdict }}</span>
+  &middot; {{ d.action_type }} &middot; {{ d.ts }} &middot; chain #{{ d.chain_seq }}
+  {% if d.degraded %}<span class="flag">&middot; decided while degraded</span>{% endif %}
+</p>
+
+{# A denial is rendered exactly as fully as an allowance: it is the case a
+   compliance reviewer opens, and its evidence is the same evidence. #}
+{% if d.rationale %}<p><em>{{ d.rationale }}</em></p>{% endif %}
+
+<h2>Candidates considered</h2>
+{% if d.candidates %}
+<table>
+  <tr><th>Action</th><th>Slot</th><th>EV (paise)</th><th></th></tr>
+  {% for c in d.candidates %}
+  <tr class="{{ 'chosen' if d.chosen and c == d.chosen else '' }}">
+    <td>{{ c.get('action', '—') }}</td>
+    <td>{{ c.get('slot', '—') }}</td>
+    <td>{{ c.get('ev_paise', '—') }}</td>
+    <td>{{ 'chosen' if d.chosen and c == d.chosen else '' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="flag">No candidates recorded — a decision without its rejected
+options cannot be reviewed (§32).</p>
+{% endif %}
+
+<h2>Compliance checks</h2>
+{% if d.compliance_checks %}
+<table>
+  <tr><th>Rule</th><th>Version</th><th>Verdict</th><th>Citation</th></tr>
+  {% for c in d.compliance_checks %}
+  <tr>
+    <td><code>{{ c.get('rule_id', '—') }}</code></td>
+    <td>{{ c.get('version', '—') }}</td>
+    <td class="{{ 'allow' if c.get('verdict') == 'ALLOW' else 'deny' }}">{{ c.get('verdict', '—') }}</td>
+    <td>{{ c.get('citation', '—') }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="flag">No compliance checks recorded.</p>
+{% endif %}
+
+<h2>Experiment</h2>
+<table>
+  <tr><th>Arm</th><td>{{ d.holdout_arm or '—' }}</td></tr>
+  <tr><th>Propensity</th><td>{{ d.propensity if d.propensity is not none else '—' }}</td></tr>
+</table>
+
+<h2>Integrity</h2>
+<table>
+  <tr><th>Hash matches</th>
+      <td class="{{ 'allow' if d.integrity.hash_matches else 'deny' }}">
+        {{ 'yes' if d.integrity.hash_matches else 'NO — this record has been altered' }}</td></tr>
+  <tr><th>Previous</th><td><code>{{ d.integrity.prev_hash }}</code></td></tr>
+  <tr><th>This record</th><td><code>{{ d.integrity.record_hash }}</code></td></tr>
+</table>
+
+<p><small>Viewed by {{ who.role }} on tenant {{ who.tenant_id }}.</small></p>

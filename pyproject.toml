@@ -16,6 +16,7 @@ dependencies = [
     "pyyaml>=6.0",                  # ADR-026; rule pack format chosen in ADR-020
     "numpy>=2.1",                   # ADR-029; reproducible streams for the simulator
     "scikit-learn>=1.9.0",  # ADR-064; §21's V1 GBM hazard and isotonic calibration
+    "jinja2>=3.1.6",
 ]
 
 [dependency-groups]
