@@ -1,0 +1,11 @@
+{
+  "_source": "constructed",
+  "_note": "Shape inferred from prayas/ingest/envelope.py's extraction rules, NOT from a recorded Razorpay delivery. See FINDING-P17-01.",
+  "entity": "event",
+  "event": "subscription.cancelled",
+  "created_at": 1767466800,
+  "contains": ["subscription"],
+  "payload": {
+    "subscription": {"entity": {"id": "sub_PxYz01", "status": "cancelled", "ended_at": 1767466800}}
+  }
+}

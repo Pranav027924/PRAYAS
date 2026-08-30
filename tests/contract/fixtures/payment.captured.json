@@ -1,0 +1,12 @@
+{
+  "_source": "constructed",
+  "_note": "Shape inferred from prayas/ingest/envelope.py's extraction rules, NOT from a recorded Razorpay delivery. See FINDING-P17-01.",
+  "entity": "event",
+  "event": "payment.captured",
+  "created_at": 1767380400,
+  "contains": ["payment", "subscription"],
+  "payload": {
+    "subscription": {"entity": {"id": "sub_PxYz01", "current_end": 1769972400}},
+    "payment": {"entity": {"id": "pay_inv_0000001", "invoice_id": "inv_0000001", "amount": 149900, "currency": "INR", "status": "captured"}}
+  }
+}

@@ -42,6 +42,8 @@ from typing import Any, Final
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from prayas.adoption.stages import may_fire
+from prayas.adoption.store import current_stage
 from prayas.domain.rails import hour_ist
 from prayas.executor.claiming import (
     STATE_CANCELLED,
@@ -137,6 +139,22 @@ async def fire_action(
     if stopped:
         await release_action(conn, action.action_id, action.tenant_id, state=STATE_CANCELLED)
         return FireOutcome(False, "killed", decision_id, detail=stopped.reason)
+
+    # ── adoption stage (§44, ADR-089) ────────────────────────────────────
+    # §44 makes each stage a *behaviour*: Observe ingests only, Shadow decides
+    # and fires nothing. Checked here rather than only at scheduling time,
+    # because an action scheduled before a stage change would otherwise still
+    # fire — and "fire nothing" that permits already-scheduled actions is not
+    # what §44 says. Fails closed to OBSERVE, which fires nothing.
+    stage = await current_stage(conn, action.tenant_id)
+    if not may_fire(stage):
+        await release_action(conn, action.action_id, action.tenant_id, state=STATE_CANCELLED)
+        return FireOutcome(
+            False,
+            "stage_forbids_firing",
+            decision_id,
+            detail=f"adoption stage {stage.name} fires nothing (§44)",
+        )
 
     # ── revalidate ───────────────────────────────────────────────────────
     stale = _revalidate(cycle, action, fired_at)

@@ -38,7 +38,11 @@ async def tenant(owner_engine: AsyncEngine) -> AsyncIterator[None]:
     async with owner_engine.begin() as conn:
         await conn.execute(text(_WIPE))
         await conn.execute(
-            text("INSERT INTO tenants (tenant_id, name) VALUES (:t,:t)"), {"t": TENANT}
+            text(
+                "INSERT INTO tenants (tenant_id, name, config) VALUES"
+                " (:t, :t, '{\"adoption_stage\": 4}'::jsonb)"
+            ),
+            {"t": TENANT},
         )
     yield
     async with owner_engine.begin() as conn:

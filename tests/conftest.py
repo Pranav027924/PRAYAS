@@ -65,7 +65,21 @@ async def _seed_tenant(conn: AsyncConnection, tenant: str) -> None:
     now = datetime.now(tz=UTC)
     params = {"t": tenant, "now": now}
 
-    await conn.execute(text("INSERT INTO tenants (tenant_id, name) VALUES (:t, :t)"), params)
+    # ADR-089 — `adoption_stage: 4` is FULL. Tests written before the adoption
+    # ramp existed assume a fully-onboarded tenant, and a tenant with no stage
+    # now reads as OBSERVE and fires nothing.
+    #
+    # **If a new test fails because nothing fired, seed the stage here — do not
+    # change the default.** OBSERVE-on-missing is deliberate: a tenant nobody
+    # has onboarded is not one to start debiting for, and firing on silence
+    # would be the worst available reading of an absent row.
+    await conn.execute(
+        text(
+            "INSERT INTO tenants (tenant_id, name, config) VALUES"
+            " (:t, :t, '{\"adoption_stage\": 4}'::jsonb)"
+        ),
+        params,
+    )
     await conn.execute(
         text(
             "INSERT INTO events_raw (event_id, tenant_id, event_type, payload, signature_ok)"
@@ -239,7 +253,11 @@ async def webhook_tenant(
     async with owner_engine.begin() as conn:
         await _truncate_all(conn)
         await conn.execute(
-            text("INSERT INTO tenants (tenant_id, name) VALUES (:t, :t)"), {"t": TENANT_A}
+            text(
+                "INSERT INTO tenants (tenant_id, name, config) VALUES"
+                " (:t, :t, '{\"adoption_stage\": 4}'::jsonb)"
+            ),
+            {"t": TENANT_A},
         )
         await conn.execute(
             text("INSERT INTO webhook_secrets (tenant_id, secret_ref) VALUES (:t, :ref)"),

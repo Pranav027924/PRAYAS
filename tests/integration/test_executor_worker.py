@@ -26,7 +26,11 @@ _WIPE = (
 
 async def _seed_tenant(conn: object, tenant: str, n: int) -> None:
     await conn.execute(  # type: ignore[attr-defined]
-        text("INSERT INTO tenants (tenant_id, name) VALUES (:t,:t)"), {"t": tenant}
+        text(
+            "INSERT INTO tenants (tenant_id, name, config) VALUES"
+            " (:t, :t, '{\"adoption_stage\": 4}'::jsonb)"
+        ),
+        {"t": tenant},
     )
     for i in range(n):
         m, c, a = f"{tenant}_m{i}", f"{tenant}_c{i}", f"{tenant}_a{i}"

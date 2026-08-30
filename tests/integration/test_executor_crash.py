@@ -51,7 +51,11 @@ async def executor_cycle(owner_engine: AsyncEngine) -> AsyncIterator[str]:
             )
         )
         await conn.execute(
-            text("INSERT INTO tenants (tenant_id, name) VALUES (:t, :t)"), {"t": TENANT}
+            text(
+                "INSERT INTO tenants (tenant_id, name, config) VALUES"
+                " (:t, :t, '{\"adoption_stage\": 4}'::jsonb)"
+            ),
+            {"t": TENANT},
         )
         await conn.execute(
             text(

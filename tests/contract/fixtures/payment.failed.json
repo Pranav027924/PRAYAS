@@ -1,0 +1,12 @@
+{
+  "_source": "constructed",
+  "_note": "Shape inferred from prayas/ingest/envelope.py's extraction rules, NOT from a recorded Razorpay delivery. See FINDING-P17-01.",
+  "entity": "event",
+  "event": "payment.failed",
+  "created_at": 1767322800,
+  "contains": ["payment", "subscription"],
+  "payload": {
+    "subscription": {"entity": {"id": "sub_PxYz01", "current_end": 1769914800}},
+    "payment": {"entity": {"id": "pay_inv_0000002", "invoice_id": "inv_0000002", "amount": 149900, "currency": "INR", "status": "failed", "error_code": "51", "error_description": "insufficient funds"}}
+  }
+}

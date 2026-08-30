@@ -23,11 +23,30 @@ Phase 17 — Live integration
 | 14 | Multi-rail | CLOSED | 2026-08-30 |
 | 15 | Hardening | CLOSED | 2026-08-30 |
 | 16 | Console | CLOSED | 2026-08-30 |
-| 17 | Live integration | not started | — |
+| 17 | Live integration | IN PROGRESS (1 of 4; blocked on credentials) | — |
 | 18–19 | see Execution Playbook | not started | — |
 
 ## Exit criteria — current phase (Phase 17 — Live integration)
-_See the Execution Playbook. Not yet planned._
+_Evidence 2026-08-30. **One of four met. The phase stays OPEN.** CI mirror green: 1,329 tests, 90.22% coverage, `mypy --strict` on 189 files, bandit clean. Goal: "wired to reality, not a notebook."_
+
+- [x] **Stage transitions gated by their exit criteria in code, not in a document** — every cell of §44's exit-criteria table is a predicate, each asserted to block on its own. `advance` refuses with the unmet list; the executor consults stage at fire time and fails closed to `OBSERVE`
+- [ ] **Full lifecycle in test mode: mandate → PDN → debit → failure → decision → retry → success** — blocked, no credentials
+- [ ] **Contract tests green nightly** — the *harness* is built and green against fixtures, but the fixtures are constructed, not recorded. This is not the criterion
+- [ ] **Reconciliation finds zero discrepancies over 7 days** — blocked; there is no provider to reconcile against, and a 7-day claim from a shorter run would be worthless
+
+**No artifact.** The phase artifact is "a real webhook producing a real decision producing a real (test-mode) debit". It does not exist.
+
+**FINDING-P17-01** records exactly what is and is not established, and the contract fixtures are marked `"_source": "constructed"` with a test asserting none is `recorded` — so a green contract suite cannot be mistaken for the criterion it does not meet.
+
+**What Phase 17 did deliver**, and it is the half that carries §44's intent — "it is a product feature, not a rollout plan":
+
+- The five stages, their behaviours, and their gates as code
+- `OBSERVE` and `SHADOW` fire **nothing**, asserted by driving `fire_action` and observing refusal — and the opposite direction asserted too, so a check that refused everything would not pass
+- A missing stage reads as `OBSERVE`, never as full rollout
+- The holdout is never retired: `holdout_pct` is a property of the stage, so `FULL` keeps 15%
+- Count-of-bad-things criteria are only meaningful beside their volume criterion, pinned by its own test
+
+**Open findings carried:** FINDING-P9-01, FINDING-P8-01 (partially resolved), FINDING-P11-01 (mechanism resolved by ADR-075), FINDING-P11-02, FINDING-P13-01, **FINDING-P17-01**.
 
 ## Closed phases
 
@@ -1137,6 +1156,32 @@ Five tests caught it, and **only on a clean build** — they passed in isolation
 **Synthetic population on purpose:** the screen answers "how would the policy behave", not "what would happen to these customers". The second question invites reading live data into a screen whose whole guarantee is that it cannot act on it.
 **Capped on purpose:** §41.1's T9 is denial of wallet, and an uncapped `cycles` parameter is the cheapest way for a caller to spend someone else's CPU.
 **Measured:** the Playbook budgets for "the DP costs 8 ms". After Phase 15's suffix-scan fix it is under 1 ms, so 1,000 cycles complete far inside the two-second criterion — the screen is more responsive than the phase was designed around.
+
+### FINDING-P17-01 · 2026-08-30 · OPEN — three Phase 17 criteria need credentials this repository does not have
+**Observed.** Phase 17's goal is "wired to reality, not a notebook", and three of its four exit criteria require Razorpay test-mode access: the full test-mode lifecycle, contract tests against live API schemas, and a 7-day reconciliation against provider state. There are no credentials here, and calling an external service is a Class A trigger in its own right.
+
+**Decision (owner, 2026-08-30): build what is buildable and leave the phase open**, rather than narrowing the criteria to what could be reached. Redefining an exit criterion to match what was achievable is the failure the phase gate exists to prevent.
+
+**What this specifically does NOT establish:**
+- That `prayas/ingest/envelope.py`'s extraction rules match what Razorpay actually sends. Its own docstring has said since Phase 1 that they "need validation against Razorpay test mode in Phase 17". They are still unvalidated.
+- That a real webhook produces a real decision produces a real test-mode debit. The phase artifact does not exist.
+- Anything about reconciliation. A 7-day claim from a run that did not last 7 days would be worthless.
+
+**Guarded so it cannot be quietly mistaken for done.** Every contract fixture carries `"_source": "constructed"`, and `test_the_fixtures_are_marked_as_unverified` asserts that none is marked `recorded`. A green contract suite therefore means "our parser still parses what *we think* Razorpay sends" — a weaker claim than the criterion, and the test fails the moment someone swaps in a real capture without updating this finding.
+
+**What would close it:** test-mode credentials, or captured real deliveries. The harness is written against the same assertions either way; only the fixture source changes.
+
+### ADR-089 · 2026-08-30 · The adoption ramp is code, and the executor obeys it
+**Approved 2026-08-30.** **Decision:** §44's five stages, their behaviours, and **every one of their exit criteria as a predicate**. `advance` refuses without evidence and names what is missing. Stage lives in `tenants.config` beside the kill switches; `fire_action` consults it and fails closed to `OBSERVE`.
+**Rationale:** §44 opens with "it is a product feature, not a rollout plan", and Phase 17's criterion is "gated by their exit criteria **in code, not in a document**." A gate in a wiki is a gate somebody advances on a Friday because the meeting went well.
+**Checked at fire time, not only at scheduling** (approved option): an action scheduled before a stage change would otherwise still fire, and §44's "fire nothing" carves out no exception for actions already in flight — the same reasoning as Invariant 3.
+**A missing stage reads as `OBSERVE`, not as full rollout.** A tenant with no recorded stage is one nobody has onboarded, and firing at their customers would be the worst possible reading of silence.
+**The holdout is never retired.** `holdout_pct` is a property of the stage rather than a separate setting, so `FULL` keeps 15% — §44: "it is what makes any value claim renewable rather than a one-time measurement."
+**Subtlety worth recording:** count-of-bad-things criteria (`gate_errors`, `double_debits`) cannot default to "unproven" — zero *is* the passing value. What stops "we saw none because we never looked" is the volume criterion beside each one: `shadow_decisions=0` blocks before zero errors can be read as evidence. Pinned by its own test.
+
+### ADR-090 · 2026-08-30 · Contract fixtures declare their provenance
+**Decision:** Every fixture in `tests/contract/fixtures/` carries `"_source"`, and a test asserts none is `recorded` while FINDING-P17-01 stands.
+**Rationale:** A contract suite that passes against invented fixtures looks exactly like one that passes against real captures. Making provenance a field the tests assert on is what stops a green run being read as evidence it is not — the same failure as Phase 15's vacuous verifier, caught before it could happen rather than after.
 
 ## Spec errata found (documentation only, no code impact)
 

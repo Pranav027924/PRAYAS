@@ -44,7 +44,13 @@ _WIPE = (
 async def _seed(conn: object, n_cycles: int, *, budget: int = 4) -> list[str]:
     """One tenant, `n_cycles` unpaid cycles, each with one due action."""
     cycle_ids = []
-    await conn.execute(text("INSERT INTO tenants (tenant_id, name) VALUES (:t,:t)"), {"t": TENANT})  # type: ignore[attr-defined]
+    await conn.execute(  # type: ignore[attr-defined]
+        text(
+            "INSERT INTO tenants (tenant_id, name, config) VALUES"
+            " (:t, :t, '{\"adoption_stage\": 4}'::jsonb)"
+        ),
+        {"t": TENANT},
+    )
     for i in range(n_cycles):
         mandate, cycle, action = f"mnd_{i}", f"cyc_{i}", f"act_{i}"
         await conn.execute(  # type: ignore[attr-defined]
