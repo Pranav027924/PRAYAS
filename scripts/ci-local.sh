@@ -13,7 +13,12 @@ cd "$(dirname "$0")/.." || exit 1
 : "${PRAYAS_DATABASE_URL_APP:=postgresql+asyncpg://prayas_app:prayas_local_dev_only@localhost:5432/prayas}"
 : "${PRAYAS_APP_DB_PASSWORD:=prayas_local_dev_only}"
 : "${PRAYAS_ENV:=local}"
+# ADR-078. Not a secret here: the value only has to be *present and stable*
+# for the forgetting tests, and defaulting it is what keeps this mirror honest
+# — the run must not pass merely because the caller happened to export one.
+: "${PRAYAS_PSEUDONYM_PEPPER:=local_dev_pepper_not_a_secret}"
 export PRAYAS_DATABASE_URL_OWNER PRAYAS_DATABASE_URL_APP PRAYAS_APP_DB_PASSWORD PRAYAS_ENV
+export PRAYAS_PSEUDONYM_PEPPER
 
 failed=0
 

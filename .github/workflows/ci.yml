@@ -39,6 +39,7 @@ jobs:
     env:
       PRAYAS_ENV: ci
       PRAYAS_APP_DB_PASSWORD: ci_only_not_a_secret
+      PRAYAS_PSEUDONYM_PEPPER: ci_only_not_a_secret
       PRAYAS_DATABASE_URL_OWNER: postgresql+asyncpg://prayas_owner:ci_only_not_a_secret@localhost:5432/prayas
       PRAYAS_DATABASE_URL_APP: postgresql+asyncpg://prayas_app:ci_only_not_a_secret@localhost:5432/prayas
 

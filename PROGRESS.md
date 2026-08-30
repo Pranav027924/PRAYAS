@@ -1,7 +1,7 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 12 — Memory subsystem
+Phase 13 — LLM layer
 
 ## Phase status
 | # | Phase | Status | Closed on |
@@ -18,19 +18,53 @@ Phase 12 — Memory subsystem
 | 9 | Notification optimizer | CLOSED | 2026-08-29 |
 | 10 | Retention subsystem | CLOSED | 2026-08-29 |
 | 11 | V1 models | CLOSED (with findings) | 2026-08-29 |
-| 12 | Memory subsystem | not started | — |
-| 13–19 | see Execution Playbook | not started | — |
+| 12 | Memory subsystem | CLOSED | 2026-08-30 |
+| 13 | LLM layer | not started | — |
+| 14–19 | see Execution Playbook | not started | — |
 
-## Exit criteria — current phase (Phase 12 — Memory subsystem)
-- [ ] Profile-informed hazard beats segment-prior-only on customers with ≥3 cycles
-- [ ] No individual profile data crosses a tenant boundary — asserted by test
-- [ ] Aggregates enforce minimum cohort size
-- [ ] Consent withdrawal deletes profile, pseudonymises ledger, suppresses contact — verified end to end
-- [ ] Feature parity job detects injected skew
+## Exit criteria — current phase (Phase 13 — LLM layer)
+_Goal: "language where only language works. Nowhere else."_
 
-**Inherited from Phase 11:** FINDING-P11-02 localises the remaining gap to *presence-prediction quality* — the sequencer aims correctly at whatever windows it is shown, and the models are not locating each customer's funding windows sharply enough (40.98% against a 75.20% oracle). Per-customer memory is exactly the lever §27 offers, so the first Phase 12 criterion is the direct continuation of that thread rather than a new one.
+- [ ] **Prompt-injection test suite** — adversarial replies attempting to set state, mark paid, or stop collection produce no effect beyond a bounded prior shift
+- [ ] Output schema violations are discarded, never partially applied
+- [ ] Explanations contain no fact absent from the record
+- [ ] LLM-proposed rules cannot activate without human confirmation
+- [ ] No PII reaches any external provider — verified by payload inspection test
+
+**Artifact.** A code-switched Hinglish reply becoming a calibrated feature — and an injection attempt visibly failing to do anything.
+
+**Inherited from Phase 12:** `declared_funding_day` already exists on the profile with §26's 180-day linear TTL and enters prediction as a *prior shift* whose weight recedes as evidence accumulates (`payday_probability`). Phase 13 supplies the parser that populates it; the bounded-influence half of Invariant 9 is built and tested, so the new work is the untrusted boundary, not the effect.
 
 ## Closed phases
+
+### Phase 12 — Memory subsystem · closed 2026-08-30
+_Evidence 2026-08-30. **Five of five met.** CI mirror green: 966 tests, 88.69% coverage, `mypy --strict` on 149 files, run from a shell with no pseudonymisation pepper set — the same condition GitHub CI runs under._
+
+- [x] **Profile-informed hazard beats segment-prior-only on customers with ≥3 cycles** — held-out log-loss **0.12020 → 0.11659, a 3.00% improvement**, on 1,061,553 rows from 1,996 customers, split by customer with zero overlap. ECE **0.0028** against §43's 0.05 threshold. §37's three-cycle bar applied as written
+- [x] **No individual profile data crosses a tenant boundary** — asserted through the memory API rather than only in SQL, including the case §27 actually forbids: the same `customer_id` at two merchants stays two profiles with different paydays (25 vs 1) and neither session can read the other
+- [x] **Aggregates enforce minimum cohort size** — the §36 `CHECK (n_obs >= 50)` plus ADR-079's contributor floor, with both boundaries asserted just-under and just-over
+- [x] **Consent withdrawal deletes profile, pseudonymises ledger, suppresses contact** — verified end to end, and the load-bearing assertion is that `verify_chain` returns **the same result before and after erasure**: the person-link is severed in `mandates`, `decisions` is never touched, Invariant 5 holds
+- [x] **Feature parity job detects injected skew** — a single row's single feature moved by 1% is caught, and the report distinguishes a one-column definition drift from an all-column wrong-snapshot
+
+**Artifact — the learning curve** (70,000 cycles, `non_absorbing`, held-out, grouped by customer):
+
+| cycles observed | rows | segment-only | profile-informed | gain | events |
+|---|---|---|---|---|---|
+| 3–4 | 144,240 | 0.13710 | 0.13280 | **+0.00430** | 14,854 |
+| 5–6 | 108,799 | 0.10692 | 0.10357 | **+0.00336** | 11,039 |
+| 7–8 | 49,825 | 0.10591 | 0.10247 | **+0.00344** | 5,078 |
+| 9–10 | 15,000 | 0.10313 | 0.10350 | −0.00038 | 1,526 |
+| 11–12 | *withheld* | — | — | — | 148 |
+
+**What the curve actually says, which is not what §29 claims.** Absolute log-loss falls steadily with observed cycles for **both** models — 0.137 → 0.103 — so the hundredth cycle genuinely is better predicted than the first. But the profile's *incremental* contribution is **flat**, roughly +0.0035 from cycle 3 through 8, and indistinguishable from zero by 9–10. Most of the improvement with tenure comes from Phase 11's observable-history features, not from §26's Bayesian payday posterior.
+
+So §29's "the profile tier compounds" holds in the weak sense (more cycles, better predictions) and **not** in the strong sense it is written to imply (each additional cycle making the profile worth more than the last). Recorded as the artifact's finding rather than smoothed over; a first pass at 24,000 cycles appeared to show the gain growing, and that trend did not survive a 10× larger sample.
+
+**A thin bucket that was noise, kept as a caution:** at 24,000 cycles the 7–8 bucket read **−0.01429** on 5,468 rows. At 70,000 it reads **+0.00344** on 49,825. Any bucket here below ~2,000 rows is withheld rather than reported.
+
+**Open findings carried:** FINDING-P9-01, FINDING-P8-01 (partially resolved), FINDING-P11-01 (mechanism resolved by ADR-075), FINDING-P11-02 (a better-calibrated model does not produce a better outcome).
+
+
 
 ### Phase 11 — V1 models · closed 2026-08-29 (with findings)
 _Evidence 2026-08-29. **Three of four met; the fourth is not met and is carried as FINDING-P11-02.** CI mirror green: 889 tests, 88.31% coverage, `mypy --strict` on 136 files._
@@ -888,6 +922,42 @@ So the knob is not modelling leakage at those values; it is forcing attempts ear
 **Caught by** the test asserting the prior actually reaches the feature matrix, not merely that the function exists — the first attempt at this wiring silently did not apply, and a prior nobody reads is still a constant.
 
 **Known cost, not yet addressed.** The presence path builds features in a Python loop over ~143 legal hours per cycle, with a timezone conversion each, and does it three times over (prior, dataset, serving). That makes it roughly an order of magnitude slower than the survival path — measured at minutes per seed rather than seconds. Fine for offline evaluation, not fine for a request path. Vectorising `hourly_features` over the whole legal mask at once is the obvious fix and was deliberately left out of this change so it would not invalidate the measurement running against it.
+
+### ADR-077 · 2026-08-30 · **SPEC DEVIATION** — the payday posterior normalises on read, not in the update
+**Approved by the project owner on 2026-08-30 as a Class A decision.**
+
+**Decision:** `payday_posterior` stores unnormalised decayed evidence; normalisation happens in `normalised_posterior()` at read time. §26's pseudocode places `normalise()` inside the update.
+
+**Why the literal reading cannot be right.** Transcribed exactly, the update decays the posterior to 0.97, adds weight 1.0, and renormalises — so the new day holds `1/1.97 ≈ 51%` of the mass *whatever the history*. Measured:
+
+| after | mass on the observed day |
+|---|---|
+| 1 observation of day 5 | 100% |
+| 20 observations of day 5, then 1 of day 20 | day 20 = **50.8%**, day 5 = 49.2% |
+| …then 2 more of day 20 | day 20 = 88.1% |
+
+Effective memory is about **two observations**, and the 0.97 decay has no effect at all — in-place normalisation swamps it. That contradicts §26's own "older observations lose influence" (they lose it immediately, and the stated decay is inert) and flatly contradicts §29: "the profile tier compounds… the hundredth cycle is meaningfully better-informed than the first." Under the literal rule the hundredth cycle is informed by roughly the last two, and Phase 12's learning-curve artifact would have measured a transcription bug rather than a memory subsystem.
+
+**What changes.** With counts kept raw, `observations` is just their sum and saturates near `1/(1−decay) ≈ 33`, so the decay does what §26 says. Twenty observations of one payday now survive a single outlier (which takes <15% of the mass instead of 51%) while a *sustained* move is still learned.
+
+**Also corrected here:** `payday_confidence` multiplies concentration by support `n/(n+κ)`. Concentration alone reported **1.0 from a single cycle** — perfect certainty bought with one observation, which is the overconfidence §21 warns about arriving through the memory tier instead of the model.
+
+### ADR-078 · 2026-08-30 · Contact suppression is a separate, insert-only table
+**Decision:** New tenant-scoped `contact_suppressions` table (migration 0010), RLS forced, `SELECT, INSERT` only for the app role. Keyed on the **pseudonym**, not the original `customer_id`.
+**Options:** separate table; a `consent_withdrawn` flag on `customer_profiles`; a nulled-out tombstone profile row.
+**Rationale:** §28's cascade both deletes the profile and suppresses future contact. Those cannot share a row: `customer_profiles` is the thing being deleted, so a flag on it is destroyed by the very operation meant to set it. **A suppression that can be forgotten is not a suppression.** Keyed on the pseudonym because §28 severs the person-link, and a list keyed on an identifier that no longer exists anywhere would match nothing. No UPDATE or DELETE grant: lifting a suppression is a new consent event, not an edit, and an erasure that can be quietly undone is not one.
+
+**Where the ledger is actually severed.** `decisions` carries no `customer_id`; the link runs `decisions.mandate_id → mandates.customer_id`. Pseudonymising *that* column severs it, so `decisions` is never touched, **Invariant 5 is not bent, and the hash chain still verifies** — asserted by comparing `verify_chain` before and after erasure.
+
+**Ordering is the reverse of §28's listing, deliberately.** Suppression is written *first*. A run that suppressed but did not finish erasing leaves data to retry against; a run that erased and then failed to suppress has destroyed the record of who must not be contacted. Only one of those is recoverable.
+
+**Fails closed.** `pseudonymise` refuses without `PRAYAS_PSEUDONYM_PEPPER` — a hash over identifiers alone is reversible by anyone holding a customer list, and would look irreversible while protecting nobody. `is_suppressed` raises rather than answering "not suppressed" when it cannot compute the pseudonym, because that wrong answer ends in contacting someone who withdrew consent.
+
+### ADR-079 · 2026-08-30 · Aggregates need a contributor floor, not only a cohort floor
+**Decision:** A `segment_priors` cell is published only if it has ≥50 observations (§27/§36's floor, already a DDL `CHECK`) **and** draws on ≥3 distinct tenants.
+**Options:** cohort floor only, as the schema states; add a contributor floor; publish everything and rely on the CHECK.
+**Rationale:** `CHECK (n_obs >= 50)` counts observations, not sources. A cell built from 100,000 rows all belonging to one tenant satisfies it completely and is still **that tenant's data wearing an aggregate's name** — publishing it to every other tenant is exactly the cross-tenant leak §27 exists to prevent. §27's own phrasing ("aggregated statistics", pooled) implies plural sources; the schema cannot express that, so the application must. The DDL check is kept as well: it is what makes the guarantee hold against a bug in this module, while the pre-filter makes a withheld cell legible instead of surfacing as an integrity error three layers up.
+**Also:** withheld keys are *returned*, not dropped. "No prior for this segment" and "suppressed for k-anonymity" are different operational facts and only one means the pipeline is working.
 
 ## Spec errata found (documentation only, no code impact)
 - §18 cites "§34.4" for isolation-as-correctness; §34 is *Estimators* and has no subsections. Correct target is **§40.4**.

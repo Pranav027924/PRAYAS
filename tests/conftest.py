@@ -112,6 +112,15 @@ async def _seed_tenant(conn: AsyncConnection, tenant: str) -> None:
         text("INSERT INTO customer_profiles (tenant_id, customer_id) VALUES (:t, :t || '_cust')"),
         params,
     )
+    # ADR-078. Keyed on the pseudonym, because §28 severs the person link and a
+    # suppression keyed on a customer_id that no longer exists matches nothing.
+    await conn.execute(
+        text(
+            "INSERT INTO contact_suppressions (tenant_id, customer_ref, reason)"
+            " VALUES (:t, :t || '_pseudo', 'consent_withdrawn')"
+        ),
+        params,
+    )
     await conn.execute(
         text(
             "INSERT INTO decisions (decision_id, tenant_id, chain_seq, prev_hash,"
@@ -154,8 +163,8 @@ async def _truncate_all(conn: AsyncConnection) -> None:
     await conn.execute(
         text(
             "TRUNCATE sim_ground_truth, webhook_secrets, experiment_config, outbox, scheduled_actions,"
-            " decisions, customer_profiles, interventions, attempts, cycles, mandates,"
-            " events_raw, tenants RESTART IDENTITY CASCADE"
+            " decisions, contact_suppressions, customer_profiles, interventions, attempts,"
+            " cycles, mandates, events_raw, tenants RESTART IDENTITY CASCADE"
         )
     )
 

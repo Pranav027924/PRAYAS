@@ -40,6 +40,9 @@ TENANT_SCOPED_TABLES: Final[frozenset[str]] = frozenset(
         # ADR-030. Simulator labels. Tenant-scoped and policed, but the app role
         # holds no privilege on it at all — see NOT_APP_READABLE below.
         "sim_ground_truth",
+        # ADR-078. §28's suppression must outlive the profile deletion that
+        # triggers it, so it cannot be a flag on `customer_profiles`.
+        "contact_suppressions",
     }
 )
 
