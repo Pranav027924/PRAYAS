@@ -227,8 +227,14 @@ def test_the_permanent_fix_is_preferred_over_retrying() -> None:
 
 
 def test_unavailable_interventions_are_named_not_hidden() -> None:
-    """§24.4 and §24.5 exist in the catalogue but cannot yet be selected."""
-    assert Intervention.RAIL_MIGRATION in UNAVAILABLE
+    """§24.5 exists in the catalogue but cannot yet be selected.
+
+    §24.4 used to be listed here too, deferred with the reason "card e-mandate
+    rail arrives in Phase 14". The rail arrived, so the deferral left with it —
+    which is why the reason was written down rather than left implicit. Its
+    behaviour is covered in `test_rail_migration.py`.
+    """
+    assert Intervention.RAIL_MIGRATION not in UNAVAILABLE
     assert Intervention.PARTIAL_COLLECTION in UNAVAILABLE
-    assert "Phase 14" in UNAVAILABLE[Intervention.RAIL_MIGRATION]
+    assert "above-AFA-cap" in UNAVAILABLE[Intervention.PARTIAL_COLLECTION]
     assert len(list(Intervention)) == 6, "§24 names six interventions"

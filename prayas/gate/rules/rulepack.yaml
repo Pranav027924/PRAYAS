@@ -26,6 +26,12 @@ rules:
     on_fail: DENY
     created_by: spec-30.1
 
+  # Version 2 is retained deliberately. The loader upserts on
+  # `(rule_id, version)`, so both rows exist and `load_active_rules` picks by
+  # `as_of` — which is what lets a decision made before 2026-08-30 replay
+  # against the version that actually governed it. Deleting this entry would
+  # erase that history on every fresh database, which is the failure ADR-020's
+  # "never edit a version in place" is written to prevent.
   - rule_id: RBI-EMANDATE-PDN-24H
     version: 2
     regulator: RBI
@@ -35,6 +41,27 @@ rules:
     rails: [upi_autopay, card_emandate, enach]
     predicate: "pdn_sent_at != null and hours_since(pdn_sent_at) >= 24"
     on_fail: DENY
+
+  # Version 3 (FINDING-P14-01). Version 2 enumerated `[upi_autopay,
+  # card_emandate, enach]` — every rail that existed, so it behaved identically
+  # to `rails: null`. A rail added later would have inherited the universal
+  # rules and silently escaped this one, and the resulting debit would have
+  # looked lawful.
+  #
+  # `as_of` is the date this *encoding* takes effect, not a new regulation. The
+  # RBI framework is unchanged and its citation is untouched. Dating it to the
+  # correction rather than back-dating to 2026-04-21 keeps §30.1's replay
+  # property intact: a decision made before then still selects version 2.
+  - rule_id: RBI-EMANDATE-PDN-24H
+    version: 3
+    regulator: RBI
+    citation: "Digital Payments – E-mandate Framework, 2026"
+    as_of: 2026-08-30
+    applies_to: [debit_attempt]
+    rails: null
+    predicate: "pdn_sent_at != null and hours_since(pdn_sent_at) >= 24"
+    on_fail: DENY
+    created_by: finding-p14-01
     created_by: spec-30.1
 
   - rule_id: NPCI-PDN-CUTOFF-2350

@@ -1,7 +1,7 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 14 — Multi-rail
+Phase 15 — Hardening
 
 ## Phase status
 | # | Phase | Status | Closed on |
@@ -20,22 +20,40 @@ Phase 14 — Multi-rail
 | 11 | V1 models | CLOSED (with findings) | 2026-08-29 |
 | 12 | Memory subsystem | CLOSED | 2026-08-30 |
 | 13 | LLM layer | CLOSED (with finding) | 2026-08-30 |
-| 14 | Multi-rail | not started | — |
-| 15–19 | see Execution Playbook | not started | — |
+| 14 | Multi-rail | CLOSED | 2026-08-30 |
+| 15 | Hardening | not started | — |
+| 16–19 | see Execution Playbook | not started | — |
 
-## Exit criteria — current phase (Phase 14 — Multi-rail)
-_Goal: "prove the abstraction with the hard rail."_
-
-- [ ] All three rails run the full loop end to end
-- [ ] eNACH's outcome latency handled without the executor assuming synchronous results
-- [ ] Rail-specific rules apply correctly and only to their rail
-- [ ] Migration proposals fire on expiring cards with an available alternate rail
-
-**Artifact.** One engine, three rails, one set of metrics.
-
-**Inherited:** the rail abstraction has existed since Phase 5 (`domain/rails.py`, ADR-024) and `RAIL_BASELINE` in `sim/lifecycle.py` already carries rail-specific revocation baselines (`upi_autopay` 1.6, `card_emandate` 1.0, `enach` 0.7) per §22. The unbuilt part is the **asynchronous** rail: eNACH's T+1 outcome latency is the first thing in the project that breaks the executor's assumption that firing an action yields an outcome, and it is where this phase's real work sits.
+## Exit criteria — current phase (Phase 15 — Hardening)
+_See the Execution Playbook. Not yet planned._
 
 ## Closed phases
+
+### Phase 14 — Multi-rail · closed 2026-08-30
+_Evidence 2026-08-30. **Four of four met.** CI mirror green: 1,132 tests, 89.33% coverage, `mypy --strict` on 168 files. Goal: "prove the abstraction with the hard rail."_
+
+- [x] **All three rails run the full loop end to end** — the sequencer solves and chooses a lawful slot on each. Asserted with rail-*specific* behaviour rather than "it ran": card (continuous) offers more lawful slots than UPI (non-peak only), which offers more than eNACH (clearing-cycle bound), and no two masks are equal. A loop producing identical output on all three would mean the abstraction carried nothing
+- [x] **eNACH's outcome latency handled without assuming synchronous results** — an attempt presented at T+0 is `awaiting`, not failed; `retry_is_blocked` returns true for **both** awaiting and overdue; a Friday presentation is not overdue on Saturday. Real-time rails record no presentation state at all
+- [x] **Rail-specific rules apply correctly and only to their rail** — `NPCI-AUTOPAY-WINDOW` denies a UPI debit at 11:00 IST and does not reach card or eNACH; card sees a strict subset of UPI's rules; the loader is asserted directly, not only through a verdict
+- [x] **Migration proposals fire on expiring cards with an available alternate rail** — and only on card (§24.4's scope limit), only within the expiry horizon or after repeated fraud holds, and never without an alternate. The proposal carries no `consent_ref`, no `mandate_id`, and no `apply` method
+
+**Artifact — one engine, three rails, one set of metrics.** Lawful slots in a 7-day dunning window from the same Monday due date:
+
+```
+card_emandate   continuous                        most slots
+upi_autopay     non-peak windows only (§1)        fewer
+enach           weekdays, before the 13:00 cut-off  fewest, and outcome T+1
+```
+
+The last column is the one that matters: eNACH is the only rail where firing an action does not yield an outcome, and it is the reason `outcome_latency` is on the protocol rather than in a UPI-shaped special case.
+
+**FINDING-P14-01 resolved** — `RBI-EMANDATE-PDN-24H` v3 with `rails: null`, dated the day the encoding was corrected so replays of earlier decisions still select v2.
+
+**Deferred and named:** §9's card "per-attempt fines for excess". Pricing that belongs in §23.1's cost model, and changing what the DP computes is not something to slip in beside an adapter (ADR-083).
+
+**Open findings carried:** FINDING-P9-01, FINDING-P8-01 (partially resolved), FINDING-P11-01 (mechanism resolved by ADR-075), FINDING-P11-02, FINDING-P13-01.
+
+
 
 ### Phase 13 — LLM layer · closed 2026-08-30 (with finding)
 _Evidence 2026-08-30. **Five of five met.** CI mirror green: 1,059 tests, 89.12% coverage, `mypy --strict` on 158 files. Goal: "language where only language works. Nowhere else."_
@@ -1014,6 +1032,32 @@ Effective memory is about **two observations**, and the 0.97 decay has no effect
 **This is correct behaviour, not a breach, and the distinction is worth stating precisely.** A customer who writes "stop" is entitled to an opt-out under TRAI whatever else the message says; §41.2 (4) calls this output "deliberately fail-safe" and says to "bias toward honouring it". More importantly, an opt-out suppresses **contact**, not **collection** — and that separation is structural: `grep` confirms neither `prayas/gate/engine.py` nor `prayas/sequencer/dp.py` imports `prayas.memory` or `prayas.llm` at all, and neither consults suppression. The money path never sees it.
 
 So the one instruction that appears to succeed is reachable by texting a single word, is legally required, and does not touch a debit. Recorded because the first reading of the test output looked like a vulnerability, and an artifact that quietly dropped the inconvenient half would be worth less than one that dissects it. Asserted in `test_artifact_an_injection_visibly_does_nothing`.
+
+### FINDING-P14-01 · 2026-08-30 · ✅ RESOLVED — a future rail would have escaped the notice rule
+**Observed.** `RBI-EMANDATE-PDN-24H` carries `rails: [upi_autopay, card_emandate, enach]` — an enumeration — where the other five cross-rail rules carry `rails: null`. The gate filters `rails IS NULL OR :rail = ANY(rails)`, so a rail not in that list does **not** receive the 24-hour notice requirement, while it does receive `DPDP-CONSENT-VALID` and `RBI-EMANDATE-AFA-CAP`.
+
+**Today the two are equivalent**, because the enumeration happens to name every rail that exists. The exposure is latent: a fourth rail inherits the universal rules and silently escapes the notice requirement until someone remembers to edit this list — and the failure is quiet, because the debit looks lawful.
+
+**Not currently reachable.** `adapter_for` raises for an unknown rail, so nothing can fire on one. This is a latent hole, not a live one.
+
+**Fixed 2026-08-30 on the owner's instruction**, as `RBI-EMANDATE-PDN-24H` **version 3** with `rails: null` (migration 0013). A new version, never an edit: ADR-020 and the rulepack's own header both require it, because "the ledger records which version governed each past decision, and rewriting a version retroactively falsifies that record."
+
+**A mistake worth recording, because the fix nearly destroyed what it claimed to protect.** Version 3 was first written by *editing* version 2's entry in the YAML rather than adding one alongside. The version number changed, so it read as correct — but the loader upserts on `(rule_id, version)` from that file, so on a **fresh database** only v3 would have existed, v2 would never have been inserted, and every decision made before v3's `as_of` would have replayed against a rule that did not govern it. §30.1's replay property would have been destroyed by the change asserting it.
+
+Five tests caught it, and **only on a clean build** — they passed in isolation because the development database still held v2 from the earlier migration. Verified by tearing the database down to `base` and rebuilding: both versions load. Pinned by `test_the_superseded_notice_rule_survives_in_the_rulepack`, which reads the YAML rather than the database, because a database that already holds the row cannot detect its removal from the source.
+
+**`as_of` is 2026-08-30, not the regulation's 2026-04-21.** The RBI framework did not change and its citation is untouched; what changed is our encoding of which rails it covers. Dating the new version to today preserves §30.1's replay property — `load_active_rules` orders by `as_of DESC`, so a decision replayed from before today still selects version 2, which is what actually governed it. Back-dating would have rewritten history in the one place §30.1 says must not be rewritten. Asserted by `test_the_earlier_version_still_governs_an_earlier_decision`.
+
+### ADR-083 · 2026-08-30 · Outcome latency is part of the rail protocol
+**Approved 2026-08-30.** **Decision:** `RailAdapter` gains `outcome_latency` and `outcome_due_at`. `attempts` gains `presented_at` and `outcome_due_at` (migration 0012). `executor/reconcile.py` treats an unresolved presentation as a third state alongside success and failure.
+**Options:** latency on the protocol with recorded due times; latency modelled but the due time computed from `fired_at`; keep outcomes synchronous with a latency annotation.
+**Rationale:** §9 names this explicitly — the adapter "must express budget, windows, *and outcome latency*, which a UPI-only design would never surface". Putting it on the protocol means every rail must answer the question, so a real-time rail returning zero is a stated fact rather than an omission.
+
+**The bug this is built against.** Treating an unresolved presentation as a failure and retrying would present the same debit into two successive clearing cycles — **debiting the customer twice on a rail where reversal is slow and manual**. `retry_is_blocked` returns true for *both* awaiting and overdue, because in both cases the money may already have moved. §19 puts an unreachable rail under degradation, not under "assume the worst"; a system that resolved unknowns toward "try again" would double-debit during an NPCI incident.
+
+**Recorded, not computed.** The due time could be derived from `fired_at` plus latency, but §32 replay reconstructs decisions from stored artifacts, and a due time recomputed later against a changed clearing calendar would silently disagree with what the system expected at the time. Both columns are nullable: writing `presented_at` on a real-time rail would imply a distinction that does not exist there.
+
+**Deferred, and named rather than skipped:** §9 gives card e-mandate "per-attempt fines for excess". Pricing that belongs in §23.1's cost model, and changing what the DP computes is not something to slip in beside an adapter. `CardEmandateAdapter.attempt_budget` returns 4 with the deferral stated in its docstring.
 
 ## Spec errata found (documentation only, no code impact)
 

@@ -238,7 +238,23 @@ def test_upi_autopay_budget_matches_the_regulator() -> None:
 
 
 @pytest.mark.parametrize("rail", ["card_emandate", "enach"])
-def test_unimplemented_rails_fail_loudly(rail: str) -> None:
-    """Phase 14 adds these. Until then, silence would be the dangerous answer."""
-    with pytest.raises(NotImplementedError, match="Phase 14"):
-        adapter_for(rail)
+def test_the_other_rails_are_implemented(rail: str) -> None:
+    """This test previously asserted these rails raised, because they did not
+    exist and silence would have been the dangerous answer. Phase 14 built
+    them, so the assertion inverts — which is the point of having pinned the
+    absence rather than leaving a gap nothing mentioned.
+
+    Their behaviour is covered in `test_rails_multi.py`; what matters here is
+    that `adapter_for` resolves them at all.
+    """
+    adapter = adapter_for(rail)
+    assert adapter.rail == rail
+    assert adapter.attempt_budget >= 1
+
+
+def test_a_rail_nobody_has_built_still_fails_loudly() -> None:
+    """The guarantee the old test was really protecting: an unknown rail must
+    not resolve to something plausible. Invariant 1 — nothing debits without
+    passing a gate that knows which rules apply."""
+    with pytest.raises(NotImplementedError, match="known rails"):
+        adapter_for("carrier_billing")

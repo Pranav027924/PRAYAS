@@ -54,9 +54,16 @@ class Intervention(StrEnum):
 
 #: Not yet selectable, and why. Named so their absence is visible.
 UNAVAILABLE: Final[dict[Intervention, str]] = {
-    Intervention.RAIL_MIGRATION: "card e-mandate rail arrives in Phase 14",
     Intervention.PARTIAL_COLLECTION: "needs an above-AFA-cap population",
 }
+
+#: §24.4 — how close to expiry a card must be before migration is proposed.
+#: One billing cycle plus a margin: proposing earlier is noise, and proposing
+#: later leaves no time for the customer to complete a fresh AFA.
+EXPIRY_HORIZON_DAYS: Final = 45
+
+#: §24.4 — "repeatedly fraud-held". Two is a pattern; one is an incident.
+FRAUD_HOLD_THRESHOLD: Final = 2
 
 
 class InterventionError(ValueError):
@@ -171,6 +178,89 @@ class Decision:
     @property
     def is_back_off(self) -> bool:
         return self.intervention is Intervention.BACK_OFF
+
+
+@dataclass(frozen=True, slots=True)
+class RailMigrationProposal:
+    """§24.4's output. **A proposal, never an action.**
+
+    §24.4: "Requires fresh AFA, so it is a customer-consented flow, not an
+    automatic action." So this carries no authority to debit and no way to
+    acquire one — migrating means the customer authenticating a new mandate on
+    the target rail, which produces a new `consent_ref` through the normal
+    enrolment path. Nothing here can manufacture that.
+
+    The asymmetry is deliberate: acting on a wrong proposal costs an unwanted
+    prompt, while auto-migrating would debit on a mandate the customer never
+    authorised — Invariant 1, and the reason §24.4 says "not an automatic
+    action" rather than leaving it to judgement.
+    """
+
+    from_rail: str
+    to_rail: str
+    reason: str
+    days_to_expiry: int | None = None
+
+    @property
+    def requires_fresh_afa(self) -> bool:
+        """Always. Stated as a property so a caller cannot forget to ask."""
+        return True
+
+    @property
+    def rationale(self) -> str:
+        window = (
+            f", {self.days_to_expiry} days to expiry" if self.days_to_expiry is not None else ""
+        )
+        return (
+            f"propose migration {self.from_rail} -> {self.to_rail}: {self.reason}{window}"
+            f" (requires fresh AFA; customer-consented, not automatic)"
+        )
+
+
+def propose_rail_migration(
+    *,
+    current_rail: str,
+    available_rails: list[str],
+    days_to_expiry: int | None = None,
+    fraud_holds: int = 0,
+    expiry_horizon_days: int = EXPIRY_HORIZON_DAYS,
+) -> RailMigrationProposal | None:
+    """§24.4, transcribed.
+
+    "Card expiring or repeatedly fraud-held, with UPI Autopay available:
+    propose migration before the mandate lapses. Requires fresh AFA, so it is a
+    customer-consented flow, not an automatic action. **High value on the card
+    e-mandate rail specifically.**"
+
+    That last sentence is a scope limit, not a remark: the trigger conditions
+    are card failure modes. A UPI mandate does not expire and an eNACH mandate
+    does not fraud-hold, so proposing migration off them would be inventing a
+    reason.
+    """
+    if current_rail != "card_emandate":
+        return None
+
+    alternates = [r for r in available_rails if r != current_rail]
+    if not alternates:
+        # Nothing to migrate *to*. §24.4's condition is "with UPI Autopay
+        # available"; without an alternate this is a lapse, not a migration.
+        return None
+
+    # Prefer UPI Autopay, as §24.4 names it explicitly.
+    target = "upi_autopay" if "upi_autopay" in alternates else alternates[0]
+
+    expiring = days_to_expiry is not None and 0 <= days_to_expiry <= expiry_horizon_days
+    repeatedly_held = fraud_holds >= FRAUD_HOLD_THRESHOLD
+    if not (expiring or repeatedly_held):
+        return None
+
+    reason = "card expiring" if expiring else f"{fraud_holds} fraud holds"
+    return RailMigrationProposal(
+        from_rail=current_rail,
+        to_rail=target,
+        reason=reason,
+        days_to_expiry=days_to_expiry if expiring else None,
+    )
 
 
 def select(

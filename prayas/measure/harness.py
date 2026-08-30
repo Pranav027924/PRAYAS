@@ -32,7 +32,7 @@ from typing import Final
 import numpy as np
 from numpy.typing import NDArray
 
-from prayas.domain.rails import IST, UpiAutopayAdapter
+from prayas.domain.rails import IST, UpiAutopayAdapter, adapter_for
 from prayas.inference.cause import infer, is_terminal
 from prayas.inference.hazard import leaky_survival
 from prayas.inference.nowcast import IssuerNowcast
@@ -236,6 +236,7 @@ def legal_mask(
     horizon: int = HORIZON_SLOTS,
     *,
     window_days: int = DUNNING_WINDOW_DAYS,
+    rail: str = "upi_autopay",
 ) -> NDArray[np.bool_]:
     """Slots at which an attempt would be lawful, for **either** arm.
 
@@ -246,10 +247,16 @@ def legal_mask(
     * the 24h notice lead (§30.1 RBI-EMANDATE-PDN-24H), so no attempt can
       precede a lawful PDN;
     * the cycle deadline (§23.4, ADR-055), after which the cycle is written off.
+
+    `rail` defaults to UPI Autopay, which is what every phase before 14 ran on
+    and what every recorded number in this file was measured under. Passing
+    another rail changes only the first constraint — §9's windows differ per
+    rail while the notice lead and the deadline do not.
     """
     slots = np.arange(horizon)
+    adapter = adapter_for(rail)
     windows = np.array(
-        [ADAPTER.is_execution_legal(due_at + timedelta(hours=int(t))) for t in slots],
+        [adapter.is_execution_legal(due_at + timedelta(hours=int(t))) for t in slots],
         dtype=np.bool_,
     )
     notice = slots >= PDN_LEAD_HOURS
