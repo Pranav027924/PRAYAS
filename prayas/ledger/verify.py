@@ -31,15 +31,24 @@ EXIT_BREAKS_FOUND = 1
 
 
 async def _tenants(engine: object) -> list[str]:
-    """Every tenant with at least one ledger record.
+    """Every tenant, via ADR-046's registry function (FINDING-P15-01).
 
-    Read without tenant context, so it must come from a table the app role can
-    read globally — `decisions` is RLS-scoped, so this uses the tenant registry
-    via a system transaction and then verifies each chain under its own context.
+    **Not `SELECT tenant_id FROM tenants`.** That table is RLS-forced with a
+    policy on `app.tenant_id`, so in a system transaction with no tenant bound
+    the policy matches nothing and the query returns zero rows — silently. The
+    verifier would then report `tenants: 0, breaks: 0` and exit successfully,
+    having checked no chain at all. §32's entire claim is that the ledger is
+    verifiable, and a verifier that passes vacuously is worse than none: it
+    produces evidence of a property it never tested.
+
+    `prayas_tenant_ids()` is the SECURITY DEFINER function migration 0009 added
+    for precisely this situation — "a worker with no tenant bound sees nothing;
+    it cannot discover which tenants exist in order to bind them." The executor
+    was moved onto it; this caller was not.
     """
     async with system_transaction(engine) as conn:  # type: ignore[arg-type]
-        result = await conn.execute(text("SELECT tenant_id FROM tenants ORDER BY tenant_id"))
-        return [row.tenant_id for row in result]
+        result = await conn.execute(text("SELECT tenant_id FROM prayas_tenant_ids()"))
+        return sorted(row.tenant_id for row in result)
 
 
 async def verify_tenant(engine: object, tenant_id: str) -> list[ChainBreak]:

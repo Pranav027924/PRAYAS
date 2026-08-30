@@ -30,6 +30,7 @@ dev = [
     "pip-audit>=2.7",        # ADR-009
     "mutmut>=3.0",           # ADR-023, §40.10 — scoped to prayas/gate/
     "types-PyYAML>=6.0",     # mypy --strict needs stubs for ADR-026
+    "bandit>=1.9.4",
 ]
 
 [build-system]
@@ -119,6 +120,18 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
 ]
+
+# ─────────────────────────── bandit (ADR-086) ───────────────────────────
+# Static analysis over the application only. Tests are excluded: they assert on
+# insecure inputs deliberately, and a scanner flagging a test that constructs a
+# hostile payload is noise that trains people to ignore the report.
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "migrations"]
+# B101 — `assert` for type narrowing, which `mypy --strict` effectively
+# requires and which is stripped under `python -O`. Every occurrence here
+# narrows a type after an explicit guard, so stripping changes nothing. Skipped
+# as a category rather than annotated at ~8 sites, which would be noise.
+skips = ["B101"]
 
 # ─────────────────────────── mutmut (ADR-023) ───────────────────────────
 # Scoped to the gate: §40.10's exit criterion is "mutation testing on gate

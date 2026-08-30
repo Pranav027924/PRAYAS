@@ -101,7 +101,7 @@ async def load(
     row = (
         await conn.execute(
             text(
-                f"SELECT {_COLUMNS} FROM customer_profiles"
+                f"SELECT {_COLUMNS} FROM customer_profiles"  # nosec B608
                 " WHERE tenant_id = :t AND customer_id = :c"
             ),
             {"t": tenant_id, "c": customer_id},
@@ -129,7 +129,7 @@ async def save(
     params = _to_row(profile, now or datetime.now(UTC))
     await conn.execute(
         text(
-            "INSERT INTO customer_profiles (" + _COLUMNS + ")"
+            "INSERT INTO customer_profiles (" + _COLUMNS + ")"  # nosec B608
             " VALUES (:tenant_id, :customer_id, CAST(:payday_posterior AS jsonb),"
             " :payday_confidence, :declared_funding_day, :declared_at, :typical_amount_p75,"
             " :fail_success_lags, :preferred_channel, :engagement_hours, :messages_30d,"

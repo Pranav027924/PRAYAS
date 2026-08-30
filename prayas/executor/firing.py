@@ -50,6 +50,7 @@ from prayas.executor.claiming import (
     release_action,
 )
 from prayas.executor.idempotency import idem_key
+from prayas.executor.killswitch import is_stopped
 from prayas.gate.engine import evaluate
 from prayas.ledger.chain import append
 from prayas.measure.experiment import Experiment, active_experiment
@@ -126,6 +127,16 @@ async def fire_action(
     if cycle is None:
         await release_action(conn, action.action_id, action.tenant_id, state=STATE_CANCELLED)
         return FireOutcome(False, "cycle_missing", decision_id)
+
+    # ── kill switch (§45, ADR-084) ───────────────────────────────────────
+    # Checked *after* the cycle is loaded so the mandate is known, and *before*
+    # anything is revalidated or fired. Fails closed: an unreadable switch stops
+    # firing, because an operator reaches for this during an incident and that
+    # is exactly when the database is least healthy.
+    stopped = await is_stopped(conn, tenant_id=action.tenant_id, mandate_id=cycle.mandate_id)
+    if stopped:
+        await release_action(conn, action.action_id, action.tenant_id, state=STATE_CANCELLED)
+        return FireOutcome(False, "killed", decision_id, detail=stopped.reason)
 
     # ── revalidate ───────────────────────────────────────────────────────
     stale = _revalidate(cycle, action, fired_at)

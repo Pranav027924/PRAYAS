@@ -168,10 +168,14 @@ async def append(conn: AsyncConnection, record: dict[str, Any], tenant_id: str) 
     }
     body["record_hash"] = compute_hash(body)
 
+    # Column *names* below are interpolated from `HASHED_FIELDS`, a module
+    # constant; every column *value* is a bound parameter. Building the list
+    # dynamically is what keeps the INSERT and the hash input provably the same
+    # set of fields — writing them out twice is how the two drift apart.
     columns = [*HASHED_FIELDS, "record_hash"]
     await conn.execute(
         text(
-            f"INSERT INTO decisions ({', '.join(columns)})"
+            f"INSERT INTO decisions ({', '.join(columns)})"  # nosec B608
             f" VALUES ({', '.join(':' + c for c in columns)})"
         ),
         {column: body.get(column) for column in columns},
@@ -192,7 +196,7 @@ async def verify_chain(conn: AsyncConnection, tenant_id: str) -> list[ChainBreak
     rows = (
         await conn.execute(
             text(
-                f"SELECT {', '.join([*HASHED_FIELDS, 'record_hash'])} FROM decisions"
+                f"SELECT {', '.join([*HASHED_FIELDS, 'record_hash'])} FROM decisions"  # nosec B608
                 " WHERE tenant_id = :tenant_id ORDER BY chain_seq"
             ),
             {"tenant_id": tenant_id},

@@ -232,3 +232,50 @@ def test_the_rationale_also_requires_exactly_one_curve() -> None:
             lead_slots=PDN_LEAD_HOURS,
             p_recoverable=0.9,
         )
+
+
+def test_the_suffix_scan_agrees_with_the_quadratic_form() -> None:
+    """The Phase 15 optimisation must be a pure speed change.
+
+    `_solve_presence` originally built a full `(horizon, horizon)` validity
+    mask. That is 518,400 elements per call, and the load test measured it at
+    roughly half the burst target. The suffix scan that replaced it computes
+    the same argmax in one pass — this asserts *the same*, on random curves,
+    rather than trusting the algebra.
+    """
+    rng = np.random.default_rng(7)
+    legal = _legal()
+    cost = attempt_cost_matrix(amount_paise=AMOUNT, budget=ATTEMPT_BUDGET, horizon_slots=HORIZON)
+
+    for _ in range(20):
+        presence = np.clip(rng.normal(0.3, 0.2, size=HORIZON), 0.0, 1.0)
+        dr = np.clip(rng.normal(0.01, 0.005, size=HORIZON), 0.0, 1.0)
+        health = np.clip(rng.normal(0.9, 0.1, size=HORIZON), 0.0, 1.0)
+
+        policy = solve(
+            presence=presence,
+            legal=legal,
+            cost=cost,
+            amount_paise=AMOUNT,
+            continuation_value_paise=W,
+            dr=dr,
+            health=health,
+            budget=ATTEMPT_BUDGET,
+            lead_slots=PDN_LEAD_HOURS,
+            p_recoverable=0.9,
+        )
+
+        # Recompute the same decision the slow way, directly from the
+        # definition, for every state.
+        p = np.clip(presence * health * 0.9, 0.0, 1.0)
+        for b in range(1, ATTEMPT_BUDGET + 1):
+            g = policy.value[b - 1] - dr * W
+            row = np.where(legal, p * (AMOUNT + W) + (1.0 - p) * g - cost[b], -np.inf)
+            for t in (0, 30, 100, HORIZON - 1):
+                lo = t + PDN_LEAD_HOURS
+                expected_ev = row[lo:].max() if lo < HORIZON else -np.inf
+                floor = W + 1.0  # MIN_EV_PAISE default
+                if expected_ev > floor:
+                    assert policy.value[b][t] == pytest.approx(expected_ev)
+                else:
+                    assert policy.value[b][t] == pytest.approx(float(W))

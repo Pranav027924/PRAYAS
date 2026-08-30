@@ -39,6 +39,10 @@ step "Type check"      uv run mypy --strict prayas tests
 step "Apply migrations" uv run alembic upgrade head
 step "Tests with coverage floor" uv run pytest --cov --cov-report=term-missing
 
+# ADR-086. Application code only; tests construct hostile payloads deliberately
+# and flagging those trains people to ignore the report.
+step "Static analysis (SAST)" uv run bandit -c pyproject.toml -r prayas -q
+
 # Audits the resolved lockfile, exactly as CI does. `--no-emit-project` matters:
 # the local `prayas` distribution is not on PyPI, and --strict treats an
 # unauditable dependency as a failure.

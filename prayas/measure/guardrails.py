@@ -28,7 +28,8 @@ from typing import Final
 
 
 class Status(StrEnum):
-    PASS = "pass"
+    # A guardrail verdict, not a credential.
+    PASS = "pass"  # nosec B105
     BREACH = "breach"
 
 

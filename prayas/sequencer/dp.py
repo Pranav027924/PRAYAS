@@ -252,15 +252,35 @@ def _solve_presence(
     p = np.clip(presence * health * p_recoverable, 0.0, 1.0)
 
     slots = np.arange(horizon)
-    valid = (slots[None, :] >= (slots[:, None] + lead_slots)) & legal[None, :]
-
+    # Reachability is a suffix, not a matrix. Because `row` below does not
+    # depend on the failure slot, every state's candidate set is the same
+    # ordered list truncated at `t + lead_slots` — so the best candidate for
+    # state `t` is the best over the suffix starting there. A reverse scan
+    # finds all of them in one pass.
+    #
+    # The two-dimensional `valid` mask this replaces was 720x720 per call,
+    # which the Phase 15 load test measured at roughly half the burst target.
     for b in range(1, budget + 1):
         g = value[b - 1] - dr * continuation_value_paise
-        row = p * total + (1.0 - p) * g - cost[b]
+        row = np.where(legal, p * total + (1.0 - p) * g - cost[b], -np.inf)
 
-        ev = np.where(valid, row[None, :], -np.inf)
-        best = np.argmax(ev, axis=1)
-        best_ev = ev[slots, best]
+        # suffix_best[i] is the best score in row[i:], and suffix_arg[i] the
+        # slot achieving it. Built right-to-left in O(horizon).
+        suffix_arg = np.empty(horizon + 1, dtype=np.int64)
+        suffix_best = np.empty(horizon + 1, dtype=np.float64)
+        suffix_arg[horizon] = STOP
+        suffix_best[horizon] = -np.inf
+        for i in range(horizon - 1, -1, -1):
+            if row[i] >= suffix_best[i + 1]:
+                suffix_best[i] = row[i]
+                suffix_arg[i] = i
+            else:
+                suffix_best[i] = suffix_best[i + 1]
+                suffix_arg[i] = suffix_arg[i + 1]
+
+        lo = np.minimum(slots + lead_slots, horizon)
+        best_ev = suffix_best[lo]
+        best = suffix_arg[lo]
 
         # ADR-061: continue only if it beats *keeping the mandate*, not zero.
         floor = continuation_value_paise + min_ev_paise

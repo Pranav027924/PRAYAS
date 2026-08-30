@@ -98,7 +98,8 @@ async def replay_decision(conn: AsyncConnection, decision_id: str) -> Replay:
     columns = ", ".join([*HASHED_FIELDS, "record_hash"])
     row = (
         await conn.execute(
-            text(f"SELECT {columns} FROM decisions WHERE decision_id = :did"),
+            # constant. The one caller-supplied value is a bound parameter.
+            text(f"SELECT {columns} FROM decisions WHERE decision_id = :did"),  # nosec B608
             {"did": decision_id},
         )
     ).one_or_none()

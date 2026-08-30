@@ -77,6 +77,9 @@ jobs:
           uv export --no-emit-project --format requirements-txt > /tmp/requirements.txt
           uv run pip-audit --strict -r /tmp/requirements.txt
 
+      - name: Static analysis (SAST)  # ADR-086
+        run: uv run bandit -c pyproject.toml -r prayas -q
+
   # Phase 2 exit criterion: "mutation testing on gate predicates: no surviving
   # mutants" (§40.10, ADR-023). Nightly rather than per-commit — §40.1 puts slow
   # tiers on that cadence, and mutation testing is the slowest of them.

@@ -138,7 +138,15 @@ def safe_eval(
     }
 
     try:
-        result = eval(compile(tree, "<rule>", "eval"), {"__builtins__": {}}, bindings)
+        # A considered `eval`, not an oversight. `validate(expr)`
+        # above walks the AST and rejects every node type not on the whitelist,
+        # so by this line the tree provably contains no call to anything but
+        # `ALLOWED_FUNCS`, no attribute access, no subscripting, no imports and
+        # no comprehensions. `__builtins__` is emptied, so even a node that
+        # slipped through would have nothing to reach. The alternative — a
+        # hand-written expression interpreter — would be more code carrying the
+        # same authority with none of CPython's scrutiny.
+        result = eval(compile(tree, "<rule>", "eval"), {"__builtins__": {}}, bindings)  # nosec B307
     except PredicateError:
         raise
     except Exception as exc:

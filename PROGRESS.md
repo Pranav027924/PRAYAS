@@ -1,7 +1,7 @@
 # PRAYAS — Build Progress
 
 ## Current phase
-Phase 15 — Hardening
+Phase 16 — Console
 
 ## Phase status
 | # | Phase | Status | Closed on |
@@ -21,13 +21,39 @@ Phase 15 — Hardening
 | 12 | Memory subsystem | CLOSED | 2026-08-30 |
 | 13 | LLM layer | CLOSED (with finding) | 2026-08-30 |
 | 14 | Multi-rail | CLOSED | 2026-08-30 |
-| 15 | Hardening | not started | — |
-| 16–19 | see Execution Playbook | not started | — |
+| 15 | Hardening | CLOSED | 2026-08-30 |
+| 16 | Console | not started | — |
+| 17–19 | see Execution Playbook | not started | — |
 
-## Exit criteria — current phase (Phase 15 — Hardening)
+## Exit criteria — current phase (Phase 16 — Console)
 _See the Execution Playbook. Not yet planned._
 
 ## Closed phases
+
+### Phase 15 — Hardening · closed 2026-08-30
+_Evidence 2026-08-30. **Five of five met.** CI mirror green: 1,193 tests, 89.71% coverage, `mypy --strict` on 176 files, bandit clean. Goal: "operable by one person at 3am."_
+
+- [x] **Every chaos scenario passes** — §40.7's five rows: kill mid-transaction and kill after outbox insert (Phase 6), plus 10% injected timeouts, database failure mid-relay, and ±5-minute clock skew. The double-debit assertion is **exact equality**, never a tolerance: §42 gives that SLI no error budget
+- [x] **Every threat-model row has a passing test or a documented accepted risk** — T1–T7 name test files whose existence is asserted; T8 (credential compromise) and T9 (denial of wallet) are accepted with the gap named. A metatest pins *which* rows are accepted, so accepting a new one is a visible diff
+- [x] **Emergency stop executes in under 60 seconds** — measured against a populated database, and asserted to actually stop firing. Three granularities, failing closed
+- [x] **Restore from backup verified, not assumed** — dump, drop the schema, restore, and check the ledger still verifies. The drill **refuses to run** against an empty database, because a 0-row restore satisfies every check vacuously
+- [x] **Load test sustains burst without lag alarm** — 500 decisions/sec, after the optimisation below
+
+**Artifact — the game-day report.** Three things broke, all of them real:
+
+| Found | By | Outcome |
+|---|---|---|
+| The ledger verifier was verifying **nothing**, and had been since Phase 1 | the backup/restore drill | FINDING-P15-01, fixed |
+| The presence DP built a 720×720 matrix per decision — **278 decisions/sec against a 500 target** | the load test | Suffix scan; **1,394/sec, 5×** |
+| The restore drill could declare success on an empty database | writing the drill | Guard added |
+
+Recovery inside SLO in every case, and each is now pinned by a test that fails if the property regresses.
+
+**Deferred and named:** DAST (ADR-085) — it scans a running web application and this surface is one webhook endpoint; claiming coverage from scanning that would be theatre. Recorded as accepted, not performed.
+
+**Open findings carried:** FINDING-P9-01, FINDING-P8-01 (partially resolved), FINDING-P11-01 (mechanism resolved by ADR-075), FINDING-P11-02, FINDING-P13-01.
+
+
 
 ### Phase 14 — Multi-rail · closed 2026-08-30
 _Evidence 2026-08-30. **Four of four met.** CI mirror green: 1,132 tests, 89.33% coverage, `mypy --strict` on 168 files. Goal: "prove the abstraction with the hard rail."_
@@ -1058,6 +1084,28 @@ Five tests caught it, and **only on a clean build** — they passed in isolation
 **Recorded, not computed.** The due time could be derived from `fired_at` plus latency, but §32 replay reconstructs decisions from stored artifacts, and a due time recomputed later against a changed clearing calendar would silently disagree with what the system expected at the time. Both columns are nullable: writing `presented_at` on a real-time rail would imply a distinction that does not exist there.
 
 **Deferred, and named rather than skipped:** §9 gives card e-mandate "per-attempt fines for excess". Pricing that belongs in §23.1's cost model, and changing what the DP computes is not something to slip in beside an adapter. `CardEmandateAdapter.attempt_budget` returns 4 with the deferral stated in its docstring.
+
+### FINDING-P15-01 · 2026-08-30 · ✅ RESOLVED — the ledger verifier was verifying nothing
+**Observed.** `python -m prayas.ledger.verify` reported `{"tenants": 0, "breaks": 0}` and exited successfully against a database holding 25 chained decisions.
+
+**Cause.** `_tenants()` ran `SELECT tenant_id FROM tenants` inside a system transaction. That table is RLS-forced with a policy on `current_setting('app.tenant_id')`, so with no tenant bound the policy matched **zero rows** — silently. The verifier then iterated an empty list and reported success.
+
+**Why it matters.** §32's entire claim is that the ledger has not been altered and can be shown not to have been. A verifier that passes vacuously is worse than none: it produces evidence of a property it never tested. This had been true since the verifier was written; every green run since Phase 1 verified nothing.
+
+**Fix.** Enumerate through `prayas_tenant_ids()`, the SECURITY DEFINER function migration 0009 added for exactly this — "a worker with no tenant bound sees nothing; it cannot discover which tenants exist in order to bind them." The executor was moved onto it in Phase 6; this caller was not.
+
+**Found by the backup/restore drill**, which noticed the verification step reporting success over an empty result — the drill was doing its job before it had finished being written.
+
+**Pinned by** `tests/chaos/test_verifier_is_not_vacuous.py`, including a test that tampers with a row and asserts the verifier *fails*. If it cannot fail, its passing means nothing.
+
+### ADR-085 · 2026-08-30 · Chaos, load and failover tested as behaviour
+**Approved 2026-08-30.** **Decisions:** §40.7's replica-partition row is tested as outbox-replay behaviour rather than by standing up streaming replication; the load driver is hand-rolled asyncio against the decision path rather than an HTTP tool; SAST is added and DAST is an accepted gap.
+**Rationale:** The property the partition row is about is that a failover costs no money — the outbox replays and the idempotency key makes replay harmless. That is our code; PostgreSQL's replication is not. The load target in §42 is decision availability, not request throughput, so an HTTP driver would measure a surface the system does not primarily present. DAST scans a running web application and this one's surface is a single webhook endpoint; claiming coverage from scanning that would be theatre, so it is recorded as accepted rather than performed.
+**Stated honestly:** the load number is a **floor measured on CI hardware**, not a capacity claim. It says the decision path is not pathologically slow, not that the system does 500/sec in production.
+
+### ADR-086 · 2026-08-30 · bandit, with findings triaged individually
+**Decision:** `bandit` over `prayas/` in both CI paths. Tests excluded — they construct hostile payloads deliberately, and a scanner flagging those trains people to ignore the report. `B101` skipped as a category (type-narrowing asserts after explicit guards). Every other finding annotated at its own line with its own reason.
+**Rationale:** Seven findings, all genuine false positives, but for two different reasons — and a blanket skip would have hidden that difference. The interesting one is `B307` on the gate's `eval`: it is a *considered* eval, not an oversight, and the annotation says why (the AST is whitelist-validated before compilation and `__builtins__` is emptied, so the tree provably contains no reachable call outside `ALLOWED_FUNCS`). `B608` is annotated per line rather than skipped globally, so it can still catch a genuine injection later.
 
 ## Spec errata found (documentation only, no code impact)
 
