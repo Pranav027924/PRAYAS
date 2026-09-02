@@ -1,0 +1,23 @@
+[
+    {
+        "tenant_id": "fitfirst",
+        "name": "FitFirst",
+        "stage": "full",
+        "mandates": 6120,
+        "rail_mix": "upi_autopay"
+    },
+    {
+        "tenant_id": "streamly",
+        "name": "Streamly",
+        "stage": "ramp",
+        "mandates": 4880,
+        "rail_mix": "card_emandate"
+    },
+    {
+        "tenant_id": "edtechco",
+        "name": "EdTechCo",
+        "stage": "canary",
+        "mandates": 1200,
+        "rail_mix": "enach"
+    }
+]

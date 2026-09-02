@@ -1,0 +1,81 @@
+{
+    "window": {
+        "from": "2026-08-03",
+        "to": "2026-09-02"
+    },
+    "stage": "full",
+    "matched_pair": {
+        "incremental_recovery_paise": 44263981,
+        "incremental_recovery_ci": [
+            37476170,
+            51051793
+        ],
+        "incremental_survival_pts": 0.0,
+        "incremental_survival_ci": [
+            0.0,
+            0.0
+        ],
+        "holdout_pct": 14,
+        "holdout_n": 295,
+        "treatment_n": 1784,
+        "treatment_recovery_rate": 0.652,
+        "holdout_recovery_rate": 0.1481
+    },
+    "efficiency": {
+        "attempts_per_recovery": 1.87,
+        "attempts_per_recovery_baseline": 6.75,
+        "permanent_fixes": 442,
+        "messages_per_customer_cycle": 1.8,
+        "fatigue_cap": 4,
+        "prevention_rate": null,
+        "prevention_rate_baseline": null,
+        "cost_per_rupee_recovered": null,
+        "cost_target": 0.02
+    },
+    "guardrails": [
+        {
+            "key": "compliance_violations",
+            "value": 0,
+            "threshold": "must be zero",
+            "status": "ok"
+        },
+        {
+            "key": "revocation_vs_control",
+            "value": 0.0,
+            "threshold": "not above control",
+            "status": "ok"
+        },
+        {
+            "key": "net_value_paise",
+            "value": 54815400,
+            "threshold": "must be positive",
+            "status": "ok"
+        }
+    ],
+    "rails": [
+        {
+            "rail": "upi_autopay",
+            "share": 1.0,
+            "mandates": 6120,
+            "active": true
+        }
+    ],
+    "health": [
+        {
+            "service": "api",
+            "up": true
+        },
+        {
+            "service": "projector",
+            "up": true
+        },
+        {
+            "service": "planner",
+            "up": false
+        },
+        {
+            "service": "executor",
+            "up": false
+        }
+    ]
+}

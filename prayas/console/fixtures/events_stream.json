@@ -1,0 +1,125 @@
+{
+    "events": [
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "ALLOW",
+            "subject": "inv_fitfirst_6063_2"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "ALLOW",
+            "subject": "inv_fitfirst_4746_0"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "DENY",
+            "subject": "inv_fitfirst_4095_0"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "DENY",
+            "subject": "inv_fitfirst_363_2"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "ALLOW",
+            "subject": "inv_fitfirst_5661_2"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "ALLOW",
+            "subject": "inv_fitfirst_5963_2"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "ALLOW",
+            "subject": "inv_fitfirst_6112_2"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "ALLOW",
+            "subject": "inv_fitfirst_4535_2"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "ALLOW",
+            "subject": "inv_fitfirst_5969_0"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "DENY",
+            "subject": "inv_fitfirst_5317_0"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "DENY",
+            "subject": "inv_fitfirst_437_1"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "ALLOW",
+            "subject": "inv_fitfirst_3260_1"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "ALLOW",
+            "subject": "cyc_7f3a91"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "DENY",
+            "subject": "inv_fitfirst_4653_0"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "DENY",
+            "subject": "inv_fitfirst_5267_0"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "ALLOW",
+            "subject": "inv_fitfirst_3952_0"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "DENY",
+            "subject": "inv_fitfirst_5257_1"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "DENY",
+            "subject": "inv_fitfirst_4153_2"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "DENY",
+            "subject": "inv_fitfirst_3176_0"
+        },
+        {
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "kind": "debit_attempt",
+            "verdict": "DENY",
+            "subject": "inv_fitfirst_3277_1"
+        }
+    ],
+    "polled_at": "2026-09-02T23:09:16.061820+00:00"
+}

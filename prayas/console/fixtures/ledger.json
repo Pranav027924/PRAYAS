@@ -1,0 +1,210 @@
+{
+    "chain": {
+        "verified": true,
+        "rows": 2629,
+        "last_checked": "2026-09-02T23:09:15.984881+00:00"
+    },
+    "decisions": [
+        {
+            "id": "2628",
+            "decision_id": "dec_d17f321c66b14d1595abc203",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_5355_2",
+            "verdict": "ALLOW",
+            "rule_count": 4,
+            "summary": null
+        },
+        {
+            "id": "2627",
+            "decision_id": "dec_fcfb6a7af8dd43598052988a",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_5196_0",
+            "verdict": "ALLOW",
+            "rule_count": 4,
+            "summary": null
+        },
+        {
+            "id": "2626",
+            "decision_id": "dec_a0a87bf4989f4ecd869bbcfb",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_911_0",
+            "verdict": "ALLOW",
+            "rule_count": 4,
+            "summary": null
+        },
+        {
+            "id": "2625",
+            "decision_id": "dec_3e2deb12e0d443768c981a3f",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_4388_2",
+            "verdict": "ALLOW",
+            "rule_count": 4,
+            "summary": null
+        },
+        {
+            "id": "2624",
+            "decision_id": "dec_99e7a32f0d834ce58bc0b011",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_5997_0",
+            "verdict": "ALLOW",
+            "rule_count": 4,
+            "summary": null
+        },
+        {
+            "id": "2623",
+            "decision_id": "dec_8b28ea8b6f464d39bebadea5",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_5661_0",
+            "verdict": "ALLOW",
+            "rule_count": 4,
+            "summary": null
+        },
+        {
+            "id": "2622",
+            "decision_id": "dec_0a6a3d97bfa648e39d732b96",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_352_2",
+            "verdict": "DENY",
+            "rule_count": 4,
+            "summary": "RBI-EMANDATE-PDN-24H"
+        },
+        {
+            "id": "2621",
+            "decision_id": "dec_fc07ebb14a83412d9c910f83",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_1610_2",
+            "verdict": "DENY",
+            "rule_count": 4,
+            "summary": "RBI-EMANDATE-PDN-24H"
+        },
+        {
+            "id": "2620",
+            "decision_id": "dec_4c051639b422435d8e9af041",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_5652_2",
+            "verdict": "ALLOW",
+            "rule_count": 4,
+            "summary": null
+        },
+        {
+            "id": "2619",
+            "decision_id": "dec_11b25f425ea44ae09893bb91",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_5948_2",
+            "verdict": "ALLOW",
+            "rule_count": 4,
+            "summary": null
+        },
+        {
+            "id": "2618",
+            "decision_id": "dec_0f4350d4724a4e84b15166c1",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_437_0",
+            "verdict": "DENY",
+            "rule_count": 4,
+            "summary": "RBI-EMANDATE-PDN-24H"
+        },
+        {
+            "id": "2617",
+            "decision_id": "dec_2b17047ede154cffb5cfec66",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_5311_2",
+            "verdict": "DENY",
+            "rule_count": 4,
+            "summary": "RBI-EMANDATE-PDN-24H"
+        },
+        {
+            "id": "2616",
+            "decision_id": "dec_0b15321b72884e88b5aac5ea",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_2701_0",
+            "verdict": "DENY",
+            "rule_count": 4,
+            "summary": "RBI-EMANDATE-PDN-24H"
+        },
+        {
+            "id": "2615",
+            "decision_id": "dec_eead446437fa4024bcc1928e",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_5618_1",
+            "verdict": "DENY",
+            "rule_count": 4,
+            "summary": "DPDP-CONSENT-VALID"
+        },
+        {
+            "id": "2614",
+            "decision_id": "dec_17a247a630514087b0efa346",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_4111_0",
+            "verdict": "DENY",
+            "rule_count": 4,
+            "summary": "RBI-EMANDATE-PDN-24H"
+        },
+        {
+            "id": "2613",
+            "decision_id": "dec_063b4b1525544bdba62527b1",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_263_1",
+            "verdict": "ALLOW",
+            "rule_count": 4,
+            "summary": null
+        },
+        {
+            "id": "2612",
+            "decision_id": "dec_94e8bade0fd241489ea92585",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_4278_0",
+            "verdict": "ALLOW",
+            "rule_count": 4,
+            "summary": null
+        },
+        {
+            "id": "2611",
+            "decision_id": "dec_415df82c4f314224881e3ed3",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_5954_1",
+            "verdict": "ALLOW",
+            "rule_count": 4,
+            "summary": null
+        },
+        {
+            "id": "2610",
+            "decision_id": "dec_1dafa19262b744c88d1be897",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_4150_1",
+            "verdict": "ALLOW",
+            "rule_count": 4,
+            "summary": null
+        },
+        {
+            "id": "2609",
+            "decision_id": "dec_bc99e0fdd82e4391b3ea638b",
+            "at": "2026-09-03T22:24:46.743360+00:00",
+            "action": "debit_attempt",
+            "subject": "inv_fitfirst_1611_0",
+            "verdict": "DENY",
+            "rule_count": 4,
+            "summary": "RBI-EMANDATE-PDN-24H"
+        }
+    ],
+    "next_cursor": "2609"
+}

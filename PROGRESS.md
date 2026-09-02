@@ -1547,6 +1547,28 @@ Riding the candidate query tied the permanent fix to "this cycle needs a retry q
 
 `_gate_context` set it to `False` unconditionally, so `DPDP-CONSENT-VALID` appeared in every ledger citation list and **could never deny** — a customer who had withdrawn consent would still be debited. It is read from `customer_profiles.consent_withdrawn` (§27 records it on the person, and `mandates.consent_ref` is NOT NULL so a withdrawal cannot be expressed there; one person may hold several mandates). The seeded fleet now produces genuine DPDP refusals.
 
+### ADR-104 · 2026-09-03 · The demo API measures, and says nothing it cannot measure
+**Decision:** `prayas/console/metrics.py` and `routes.py` — six read-only endpoints (Demo spec §R2), frozen once the screens are built against them.
+
+**Every figure is computed from the pipeline's own output.** Where the data cannot support one, the field is `None` and the screen omits it: `prevention_rate` needs a counterfactual on cycles that never failed, and `cost_per_rupee_recovered` needs a rail price sheet. The reference payload in §R2 shows *shapes*; filling a gap with a plausible constant would make the whole surface worthless, and a payments reviewer is exactly the audience that checks.
+
+**Two figures are statistics, computed as such.** Incremental recovery is the treatment-minus-holdout rate applied to the treated population at its own average ticket, with a 95% interval from the normal approximation to a difference of proportions. An interval excluding zero is the claim; a point estimate is not. Survival is the same comparison on mandates still alive — §6 forbids reporting recovery without it, because a dunning system can lift recovery while destroying the book.
+
+Arm membership comes from `cohort.arm_for`, the hash the planner consults, so the split on screen is the split the engine used.
+
+**Read-only, asserted.** `test_the_demo_api_is_read_only` walks the route table and fails if any `/v1/` route gains a mutating method.
+
+### FINDING-P17-15 · 2026-09-03 · ✅ RESOLVED — a first-time success counted as a recovery
+**Observed.** `/v1/portfolio/summary` returned HTTP 500 (`math domain error`), and before that a treatment recovery rate of **2.68** and **0.46** attempts per recovery — both arithmetically impossible.
+
+**Cause.** The aggregation counted a cycle as *recovered* whenever `recovered_paise > 0`, but as *failed* only when `attempts_used > 0`. A cycle that was paid first time therefore entered the numerator and not the denominator, so the ratio exceeded 1, `p(1-p)` went negative, and `math.sqrt` raised inside the request handler.
+
+**Why it matters beyond the crash.** The rate is the headline number on the portfolio screen. A quiet 2.68 would have read as 268% recovery to anyone who did not stop to notice that recovery above 100% is meaningless — and the crash is the only reason it was noticed at all.
+
+**Fix.** A cycle with no failure is skipped entirely: there was nothing to recover from, and the denominator defines the population. `_diff_ci` also returns `None` for a proportion outside `[0, 1]` — a bug upstream should make the interval absent, not raise inside a handler. Corrected figures: treatment **65.2%** against a holdout **14.8%**, ₹442,640 incremental with a 95% CI of ₹374,762–₹510,518, and 1.87 attempts per recovery against 6.75.
+
+**Two more found in the same aggregate.** Fleet rail mix averaged per-tenant *shares*, reporting 33/33/33 for three single-rail tenants of 6,120, 4,880 and 1,200 — now weighted by mandates (50/40/10). And a summed guardrail inherited a component tenant's status, so a **positive** fleet net value of ₹567,342 was reported as a breach; summed metrics now recompute their verdict from the sum.
+
 ## Spec errata found (documentation only, no code impact)
 
 - **§4 (line 193) cites "§21.4" for reply parsing residency.** §21 is the liquidity hazard model and has no subsections; the content is in **§41.3**. Found in Phase 13.

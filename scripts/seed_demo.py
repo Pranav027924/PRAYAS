@@ -133,6 +133,18 @@ HOLDOUT_RECOVERY: Final = 0.30
 CHRONIC_TREATMENT_RECOVERY: Final = 0.72
 CHRONIC_HOLDOUT_RECOVERY: Final = 0.10
 
+#: Mandates cancelled during the window, by arm. §6 forbids reporting recovery
+#: without survival beside it, and a fleet where nothing is ever revoked makes
+#: that pair vacuous — the control arm has to be able to look *better* on
+#: survival for the comparison to mean anything.
+#:
+#: Untreated chronic failure is what kills a mandate: a customer debited on the
+#: wrong day, month after month, cancels. That is the churn the engine claims to
+#: prevent, so the seeded rate is higher where nothing intervened.
+REVOCATION_TREATMENT: Final = 0.02
+REVOCATION_HOLDOUT: Final = 0.05
+REVOCATION_CHRONIC_HOLDOUT: Final = 0.14
+
 #: Share of customers who have asked not to be contacted. Their notice is
 #: suppressed (§24.6), so the debit that depended on it is refused at fire time
 #: on `RBI-EMANDATE-PDN-24H` — a genuine refusal from a genuine condition,
@@ -460,6 +472,23 @@ def _events_for_mandate(
                         "created_at": int(recovered_at.timestamp()),
                     }
                 )
+    # Churn, at the end of the window so it does not truncate the history.
+    if chronic and arm is not Arm.TREATMENT:
+        rate = REVOCATION_CHRONIC_HOLDOUT
+    elif arm is Arm.TREATMENT:
+        rate = REVOCATION_TREATMENT
+    else:
+        rate = REVOCATION_HOLDOUT
+    if rng.random() < rate:
+        out.append(
+            {
+                "_id": f"{mandate_id}_cancel",
+                "event": "subscription.cancelled",
+                "payload": {"subscription": sub},
+                "created_at": int((now - timedelta(days=rng.randint(1, 8))).timestamp()),
+            }
+        )
+
     return out
 
 

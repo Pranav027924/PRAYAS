@@ -1,0 +1,85 @@
+{
+    "window": {
+        "from": "2026-08-03",
+        "to": "2026-09-02"
+    },
+    "stage": "mixed",
+    "matched_pair": {
+        "incremental_recovery_paise": 46182781,
+        "incremental_recovery_ci": null,
+        "incremental_survival_pts": 33.33,
+        "incremental_survival_ci": null,
+        "holdout_pct": 14,
+        "holdout_n": 349,
+        "treatment_n": 2119
+    },
+    "efficiency": {
+        "permanent_fixes": 469,
+        "fatigue_cap": 4,
+        "attempts_per_recovery": null,
+        "attempts_per_recovery_baseline": null,
+        "messages_per_customer_cycle": null,
+        "prevention_rate": null,
+        "prevention_rate_baseline": null,
+        "cost_per_rupee_recovered": null,
+        "cost_target": 0.02
+    },
+    "guardrails": [
+        {
+            "key": "compliance_violations",
+            "value": 0,
+            "threshold": "must be zero",
+            "status": "ok"
+        },
+        {
+            "key": "revocation_vs_control",
+            "value": 0.0,
+            "threshold": "not above control",
+            "status": "ok"
+        },
+        {
+            "key": "net_value_paise",
+            "value": 56734200,
+            "threshold": "must be positive",
+            "status": "ok"
+        }
+    ],
+    "rails": [
+        {
+            "rail": "upi_autopay",
+            "share": 0.5016,
+            "mandates": 6120,
+            "active": true
+        },
+        {
+            "rail": "card_emandate",
+            "share": 0.4,
+            "mandates": 4880,
+            "active": true
+        },
+        {
+            "rail": "enach",
+            "share": 0.0984,
+            "mandates": 1200,
+            "active": true
+        }
+    ],
+    "health": [
+        {
+            "service": "api",
+            "up": true
+        },
+        {
+            "service": "projector",
+            "up": true
+        },
+        {
+            "service": "planner",
+            "up": false
+        },
+        {
+            "service": "executor",
+            "up": false
+        }
+    ]
+}

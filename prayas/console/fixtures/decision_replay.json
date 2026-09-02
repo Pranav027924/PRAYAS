@@ -1,0 +1,57 @@
+{
+    "decision_id": "dec_d17f321c66b14d1595abc203",
+    "tenant_id": "fitfirst",
+    "chain_seq": 2628,
+    "ts": "2026-09-03T22:24:46.743360+00:00",
+    "action_type": "debit_attempt",
+    "verdict": "ALLOW",
+    "rationale": "fired attempt 2 of 4",
+    "candidates": [],
+    "chosen": {
+        "idem_key": "prayas_ab6b8566494ad691bb47f712959651da",
+        "action_type": "debit_attempt"
+    },
+    "compliance_checks": [
+        {
+            "as_of": "2023-08-11",
+            "rule_id": "DPDP-CONSENT-VALID",
+            "verdict": "ALLOW",
+            "version": 1,
+            "citation": "DPDP Act 2023",
+            "regulator": "MeitY"
+        },
+        {
+            "as_of": "2026-08-01",
+            "rule_id": "NPCI-AUTOPAY-WINDOW",
+            "verdict": "ALLOW",
+            "version": 3,
+            "citation": "UPI Autopay non-peak execution windows",
+            "regulator": "NPCI"
+        },
+        {
+            "as_of": "2026-04-21",
+            "rule_id": "RBI-EMANDATE-AFA-CAP",
+            "verdict": "ALLOW",
+            "version": 2,
+            "citation": "Digital Payments \u2013 E-mandate Framework, 2026",
+            "regulator": "RBI"
+        },
+        {
+            "as_of": "2026-08-30",
+            "rule_id": "RBI-EMANDATE-PDN-24H",
+            "verdict": "ALLOW",
+            "version": 3,
+            "citation": "Digital Payments \u2013 E-mandate Framework, 2026",
+            "regulator": "RBI"
+        }
+    ],
+    "holdout_arm": null,
+    "propensity": null,
+    "degraded": false,
+    "integrity": {
+        "hash_matches": true,
+        "prev_hash": "9bfa98d788e2348178aefadbbafd4fda7c51d746065f1cee67de452a3bb213de",
+        "record_hash": "3e74b49c31be86ad8e7420514d2b6802380054c62fb9c3a34d0be850784f6f50"
+    },
+    "shows_rejected_candidates": false
+}
