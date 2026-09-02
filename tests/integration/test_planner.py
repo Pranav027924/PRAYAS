@@ -185,3 +185,42 @@ async def test_the_revocation_model_is_what_lets_the_planner_act(
     await _seed(owner_engine, stage=Stage.FULL)
     result = await plan_tenant(owner_engine, TENANT, RICH_PRIORS)
     assert result.scheduled + result.stopped == 1
+
+
+def test_the_notice_mask_matches_the_notice_planner_exactly() -> None:
+    """The fast mask must agree with the literal question it replaces.
+
+    `_notice_feasible_mask` used to ask `notify.planner.plan` about all 720
+    slots, each scanning 73 candidate instants — ~52,000 datetime comparisons
+    per cycle, which dominated planning to the point that seeding a fleet took
+    hours. It is now a prefix sum.
+
+    That reduction is only exact because the contact window closes at 19:00 IST
+    and the submission cutoff is 23:50, so the cutoff cannot bind inside the
+    window. If either constant moves, the shortcut silently stops being
+    equivalent — this asserts it still is, at every position in the IST day,
+    because the window's alignment against UTC is exactly what varies.
+    """
+    import numpy as np
+
+    from prayas.notify.planner import plan as notification_plan
+    from prayas.planner.worker import _notice_feasible_mask
+
+    horizon = 720
+    for hour in range(0, 24, 3):
+        decided = datetime(2026, 9, 2, hour, 30, tzinfo=UTC)
+        fast = _notice_feasible_mask(decided_at=decided, horizon_slots=horizon)
+        literal = np.fromiter(
+            (
+                notification_plan(
+                    debit_at=decided + timedelta(hours=h),
+                    decided_at=decided,
+                    predicted_funding_at=None,
+                    risk=0.0,
+                ).will_send
+                for h in range(horizon)
+            ),
+            dtype=bool,
+            count=horizon,
+        )
+        assert (fast == literal).all(), f"mask diverges from the planner at {hour:02d}:30 UTC"

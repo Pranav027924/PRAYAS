@@ -18,10 +18,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any, Final
 
-from prayas_rulepack.predicate import PredicateError, safe_eval
+from prayas_rulepack.predicate import PredicateError, make_hours_since, safe_eval
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -219,6 +219,7 @@ async def evaluate(
     rail: str | None,
     ctx: dict[str, Any],
     as_of: date,
+    now: datetime | None = None,
 ) -> GateResult:
     """The chokepoint. Returns a verdict and the evidence behind it.
 
@@ -267,4 +268,16 @@ async def evaluate(
             degraded=True,
         )
 
-    return evaluate_rules(rules, ctx, {"afa_free_cap": make_afa_free_cap(caps)})
+    # `hours_since` is bound to the instant this evaluation is *for*, not to
+    # the wall clock. §32 requires the gate to be re-evaluated at fire time,
+    # and a decision is only reproducible if "when" is an input rather than
+    # something the helper reads for itself (FINDING-P17-12).
+    evaluated_at = now or datetime.now(tz=UTC)
+    return evaluate_rules(
+        rules,
+        ctx,
+        {
+            "afa_free_cap": make_afa_free_cap(caps),
+            "hours_since": make_hours_since(evaluated_at),
+        },
+    )

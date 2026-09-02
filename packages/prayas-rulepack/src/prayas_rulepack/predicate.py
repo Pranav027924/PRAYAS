@@ -58,13 +58,41 @@ ALLOWED_NODES: Final[tuple[type[ast.AST], ...]] = (
 )
 
 
-def _hours_since(moment: datetime | None) -> float:
-    """Hours elapsed since ``moment``. Absent timestamps deny by returning -inf.
+def make_hours_since(now: datetime) -> Callable[[datetime | None], float]:
+    """Bind ``hours_since`` to a specific evaluation instant.
 
-    Returning negative infinity rather than raising means a rule like
-    ``hours_since(pdn_sent_at) >= 24`` evaluates False for a missing PDN, which
-    is the correct answer -- no notice was sent -- rather than an error the
-    caller has to interpret.
+    The gate is meant to be a pure function of ``(context, as_of)``: §30.1's
+    replay property and §32's "evaluated at fire time" both say *which* instant
+    a decision was reached at, and a helper reading the wall clock quietly
+    substitutes a different one. It also made the rule untestable at a chosen
+    time -- every fixture in this repository anchors itself to
+    ``now() - 30h`` to work around it -- and made a 24-hour notice period
+    impossible to demonstrate in under 24 hours.
+
+    Injected per evaluation, exactly like ``afa_free_cap`` (ADR-021), so the
+    predicate language is unchanged and the rule pack keeps saying
+    ``hours_since(pdn_sent_at) >= 24``.
+    """
+
+    def hours_since(moment: datetime | None) -> float:
+        if moment is None:
+            # ``-math.inf`` rather than ``float("-inf")``: the string form
+            # yields an unkillable equivalent mutant under mutation testing,
+            # since "-INF" parses to the identical value (ADR-023).
+            return -math.inf
+        if moment.tzinfo is None:
+            raise PredicateError("naive datetime in predicate context")
+        return (now - moment).total_seconds() / 3600.0
+
+    return hours_since
+
+
+def _hours_since(moment: datetime | None) -> float:
+    """Hours elapsed since ``moment``, against the wall clock.
+
+    The fallback when no evaluation instant is injected. Prefer
+    ``make_hours_since``: a caller that knows *when* it is deciding should say
+    so, and every caller inside this project does.
     """
     if moment is None:
         # `-math.inf` rather than `float("-inf")`: the string form yields an
@@ -89,7 +117,7 @@ ALLOWED_FUNCS: Final[Mapping[str, Callable[..., Any]]] = {
 }
 
 #: Names the engine may inject at evaluation time.
-INJECTABLE_FUNCS: Final[frozenset[str]] = frozenset({"afa_free_cap"})
+INJECTABLE_FUNCS: Final[frozenset[str]] = frozenset({"afa_free_cap", "hours_since"})
 
 #: §30.1's predicates are written with `!= null`, which is not Python. Rules are
 #: authored by compliance reviewers, not engineers, so the spec's spelling is

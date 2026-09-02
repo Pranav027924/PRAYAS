@@ -46,16 +46,24 @@ from prayas.adoption.store import current_stage
 from prayas.config import Settings
 from prayas.db.engine import create_app_engine
 from prayas.db.tenancy import system_transaction, tenant_transaction
-from prayas.domain.rails import adapter_for
+from prayas.domain.rails import PDN_CUTOFF_HOUR_IST, adapter_for
 from prayas.executor.claiming import STATE_CLAIMED, STATE_PENDING, active_tenants
 from prayas.executor.notice import ACTION_TYPE_NOTICE
+from prayas.inference.bands import ticket_band
 from prayas.inference.cause import infer, is_terminal
 from prayas.models.live import PriorTable, load_priors, presence_curve
+from prayas.notify.planner import (
+    CONTACT_CLOSE_IST,
+    MAX_NOTICE_HOURS,
+    MIN_NOTICE_HOURS,
+    is_contact_window,
+)
 from prayas.notify.planner import plan as notification_plan
 from prayas.observability import metrics
 from prayas.observability.logging import configure
+from prayas.planner.datechange import maybe_propose as maybe_propose_date_change
 from prayas.retention.revocation import RevocationFeatures, RevocationModel
-from prayas.sequencer.dp import solve
+from prayas.sequencer.dp import BoolArray, solve
 from prayas.sequencer.economics import (
     attempt_cost_matrix,
     continuation_value_paise,
@@ -86,8 +94,15 @@ PDN_LEAD_HOURS = 24
 #: rather than at the last legal slot".
 BOOTSTRAP_MONTHLY_REVOCATION = 0.04
 
-#: Cycles considered per tenant per pass.
+#: Cycles *acted on* per tenant per pass.
 BATCH = 100
+
+#: How many rows to read to find them. At CANARY the stage treats 1% of
+#: mandates, so a page the size of the batch is ~99% cycles the planner must
+#: skip — correct, but it makes progress crawl. Reading wider absorbs the
+#: excluded rows in one query instead of one page per handful of treatable
+#: cycles.
+PAGE = BATCH * 12
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +111,10 @@ class TickResult:
     scheduled: int
     stopped: int
     shadowed: int
+    proposed: int = 0
+    #: Rows read, whether acted on or not. The cursor advances by this so a
+    #: run of un-actionable cycles cannot block the ones behind it.
+    examined: int = 0
 
 
 _CANDIDATES = text(
@@ -111,8 +130,15 @@ _CANDIDATES = text(
     "       SELECT 1 FROM scheduled_actions a"
     "        WHERE a.tenant_id = c.tenant_id AND a.cycle_id = c.cycle_id"
     "          AND a.state IN (:pending, :claimed))"
-    " ORDER BY c.deadline_at"
-    " LIMIT :batch"
+    # A *total* order, and paged. `deadline_at` alone is not total — a fleet
+    # billing on one schedule shares a single deadline, so the sort collapses
+    # to an arbitrary but stable heap order and every tick reads the same
+    # prefix. Any row the planner declines to act on (a holdout mandate, say)
+    # then blocks that prefix permanently: the planner reads it, skips it,
+    # and never reaches the cycles behind it. Observed live as a fleet with
+    # 5,198 treatment cycles making zero progress behind 100 holdout ones.
+    " ORDER BY c.deadline_at, c.cycle_id"
+    " OFFSET :offset LIMIT :batch"
 )
 
 
@@ -170,31 +196,48 @@ def _revocation_features(
     )
 
 
-def _notice_feasible_mask(*, decided_at: datetime, horizon_slots: int) -> Any:
+def _notice_feasible_mask(*, decided_at: datetime, horizon_slots: int) -> BoolArray:
     """Debit slots for which a lawful notice instant exists.
 
     §30.1 imposes two constraints that interact: the notice must lead the debit
     by at least 24 hours, **and** it must fall inside the contact window. A
-    debit slot is only lawful if some instant satisfies both, and the two
-    cannot be checked independently — at 00:30 IST every instant in the next
-    25 hours that clears the lead is outside the window, so the earliest
-    lawful debit is much later than the lead alone implies.
+    debit slot is only lawful if some instant satisfies both, and the two cannot
+    be checked independently — at 00:30 IST every instant in the next 25 hours
+    that clears the lead is outside the window, so the earliest lawful debit is
+    much later than the lead alone implies.
 
-    Choosing the debit first and asking about the notice afterwards produces a
-    slot the notice planner then refuses, and the pair is abandoned — which is
-    exactly what happened before this mask existed. Folding the constraint into
-    the legality mask lets the DP optimise over slots that can actually be
-    served.
+    Computed as a sliding window rather than by asking the notice planner about
+    every slot. That literal version was O(horizon x candidates) — roughly
+    52,000 datetime comparisons per cycle — and it dominated planning time to
+    the point that a fleet took hours instead of minutes.
+
+    The reduction is exact rather than an approximation, and rests on one fact
+    asserted below: the contact window closes at 19:00 IST and the submission
+    cutoff is 23:50, so **inside the window the cutoff can never bind**. What
+    is left is "is there a contact-window hour between 24 and 96 hours before
+    this slot", which is a prefix sum.
     """
+    if CONTACT_CLOSE_IST > PDN_CUTOFF_HOUR_IST:  # pragma: no cover - guards the reduction
+        raise RuntimeError(
+            "the contact window now extends past the submission cutoff, so the "
+            "cutoff can bind inside it and this mask is no longer exact"
+        )
+
+    # Hours at which a notice may lawfully be *sent*, ignoring which debit it
+    # precedes — that part is the offset window below.
+    sendable = np.fromiter(
+        (is_contact_window(decided_at + timedelta(hours=h)) for h in range(horizon_slots)),
+        dtype=bool,
+        count=horizon_slots,
+    )
+    prefix = np.concatenate(([0], np.cumsum(sendable, dtype=np.int64)))
+
     feasible = np.zeros(horizon_slots, dtype=bool)
-    for slot in range(horizon_slots):
-        debit_at = decided_at + timedelta(hours=slot)
-        feasible[slot] = notification_plan(
-            debit_at=debit_at,
-            decided_at=decided_at,
-            predicted_funding_at=None,
-            risk=0.0,
-        ).will_send
+    for slot in range(MIN_NOTICE_HOURS, horizon_slots):
+        lo = max(0, slot - MAX_NOTICE_HOURS)
+        hi = slot - MIN_NOTICE_HOURS
+        if hi >= lo:
+            feasible[slot] = bool(prefix[hi + 1] - prefix[lo])
     return feasible
 
 
@@ -271,15 +314,20 @@ def _choose_slot(
 
 
 async def plan_tenant(
-    engine: AsyncEngine, tenant_id: str, priors: PriorTable, *, now: datetime | None = None
+    engine: AsyncEngine,
+    tenant_id: str,
+    priors: PriorTable,
+    *,
+    now: datetime | None = None,
+    offset: int = 0,
 ) -> TickResult:
-    """Plan one tenant's due cycles."""
+    """Plan one tenant's due cycles, starting `offset` rows into the queue."""
     decided_at = now or datetime.now(UTC)
 
     async with tenant_transaction(engine, tenant_id) as conn:
         stage = await current_stage(conn, tenant_id)
         if not may_decide(stage):
-            return TickResult(0, 0, 0, 0)
+            return TickResult(0, 0, 0, 0, 0, examined=0)
 
         rows = list(
             await conn.execute(
@@ -289,13 +337,16 @@ async def plan_tenant(
                     "now": decided_at,
                     "pending": STATE_PENDING,
                     "claimed": STATE_CLAIMED,
-                    "batch": BATCH,
+                    "batch": PAGE,
+                    "offset": offset,
                 },
             )
         )
 
-        considered = scheduled = stopped = shadowed = 0
+        considered = scheduled = stopped = shadowed = proposed = 0
         for row in rows:
+            if considered >= BATCH:
+                break
             # The cohort gates *scheduling*, not deciding. SHADOW has a
             # mandate_share of 0.0 because it acts on nothing, yet §44 has it
             # "decide and log" across the portfolio — that is the comparison
@@ -310,6 +361,26 @@ async def plan_tenant(
                     continue
 
             considered += 1
+
+            # §24.3 ranks the permanent fix above a retry: moving the debit day
+            # eliminates the failure rather than recovering from it monthly.
+            # Proposed alongside the retry rather than instead of it — an
+            # amendment needs the customer's agreement, and this cycle still
+            # needs collecting in the meantime (ADR-102).
+            if await maybe_propose_date_change(
+                conn,
+                tenant_id=tenant_id,
+                mandate_id=str(row.mandate_id),
+                cycle_id=str(row.cycle_id),
+                debit_day=row.due_at.day,
+                mcc=str(row.mcc or "0000"),
+                rail=str(row.rail),
+                ticket_band=ticket_band(int(row.amount_paise)),
+                priors=priors,
+                decided_at=decided_at,
+            ):
+                proposed += 1
+
             attempts_remaining = int(row.attempt_budget) - int(row.attempts_used)
             code = await _latest_decline_code(conn, tenant_id, row.mandate_id)
 
@@ -381,7 +452,7 @@ async def plan_tenant(
             # Deterministic in the cycle and the attempt number, so a replayed
             # tick collides instead of queueing a second debit.
             action_id = f"{tenant_id}:{row.cycle_id}:{row.attempts_used}"
-            await conn.execute(
+            inserted = await conn.execute(
                 text(
                     "INSERT INTO scheduled_actions"
                     " (action_id, tenant_id, cycle_id, mandate_id, action_type,"
@@ -400,6 +471,12 @@ async def plan_tenant(
                     "payload": f'{{"amount_paise": {int(row.amount_paise)}, "slot": {slot}}}',
                 },
             )
+            if inserted.rowcount == 0:
+                # `ON CONFLICT DO NOTHING` fired: this cycle already had its
+                # action. Counting the attempt rather than the insert made a
+                # seeding run report 42,400 actions scheduled against a queue
+                # of 3,900 — the guard working, and the tally not noticing.
+                continue
             assert notice.send_at is not None  # `will_send` was checked above
             await conn.execute(
                 text(
@@ -435,7 +512,13 @@ async def plan_tenant(
                 },
             )
 
-    return TickResult(considered, scheduled, stopped, shadowed)
+    return TickResult(considered, scheduled, stopped, shadowed, proposed, examined=len(rows))
+
+
+#: Where each tenant's next pass starts. Held in memory rather than persisted:
+#: losing it on restart costs a re-scan, never correctness, and the alternative
+#: is a table whose only job is to remember a row number.
+_CURSOR: dict[str, int] = {}
 
 
 async def tick(engine: AsyncEngine, *, now: datetime | None = None) -> TickResult:
@@ -443,18 +526,41 @@ async def tick(engine: AsyncEngine, *, now: datetime | None = None) -> TickResul
     async with system_transaction(engine) as conn:
         priors = await load_priors(conn)
 
-    totals = [0, 0, 0, 0]
+    totals = [0, 0, 0, 0, 0, 0]
     for tenant_id in await active_tenants(engine):
         try:
-            r = await plan_tenant(engine, tenant_id, priors, now=now)
+            offset = _CURSOR.get(tenant_id, 0)
+            r = await plan_tenant(engine, tenant_id, priors, now=now, offset=offset)
+            # Reset on progress, advance on none. Acting on a cycle removes it
+            # from the candidate set, so every offset past that point shifts and
+            # a monotonic cursor would skip rows it never read. Advancing only
+            # when a page yielded nothing is what steps over a run of
+            # un-actionable cycles without stepping over live ones.
+            if r.considered or r.examined < PAGE:
+                _CURSOR[tenant_id] = 0
+            else:
+                _CURSOR[tenant_id] = offset + r.examined
             totals[0] += r.considered
             totals[1] += r.scheduled
             totals[2] += r.stopped
             totals[3] += r.shadowed
+            totals[4] += r.proposed
+            # Aggregated because a caller driving ticks in a loop needs to know
+            # whether the queue is empty or merely un-actionable this pass —
+            # omitting it made every tick report zero rows read and stopped a
+            # seeding run four rounds in, with thousands of cycles left.
+            totals[5] += r.examined
         except Exception:
             metrics.increment("planner_tenant_error", tenant_id=tenant_id)
             log.exception("planner.tenant_failed", extra={"tenant_id": tenant_id})
-    return TickResult(*totals)
+    return TickResult(
+        considered=totals[0],
+        scheduled=totals[1],
+        stopped=totals[2],
+        shadowed=totals[3],
+        proposed=totals[4],
+        examined=totals[5],
+    )
 
 
 async def run(
@@ -467,7 +573,7 @@ async def run(
     while not stop.is_set():
         try:
             result = await tick(engine)
-            if result.scheduled or result.stopped or result.shadowed:
+            if result.scheduled or result.stopped or result.shadowed or result.proposed:
                 log.info(
                     "planner.tick",
                     extra={
@@ -475,6 +581,7 @@ async def run(
                         "scheduled": result.scheduled,
                         "stopped": result.stopped,
                         "shadowed": result.shadowed,
+                        "date_changes": result.proposed,
                     },
                 )
         except Exception:

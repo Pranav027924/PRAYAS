@@ -257,9 +257,22 @@ async def _upsert_cycle(
             "INSERT INTO cycles (cycle_id, tenant_id, mandate_id, seq_no, amount_paise,"
             "   due_at, deadline_at, attempt_budget, attempts_used, state,"
             "   last_failure_at, recovered_paise)"
-            " VALUES (:cycle_id, :tenant_id, :mandate_id, 1, :amount_paise,"
+            # `seq_no` is the mandate's billing sequence and the table enforces
+            # UNIQUE (mandate_id, seq_no). It was a literal 1, which meant a
+            # mandate could hold exactly one cycle ever — every mandate's
+            # second billing month raised UniqueViolation and stalled the
+            # projector for that whole tenant (FINDING-P17-13).
+            #
+            # Safe to derive by max: `_project_one_mandate` takes FOR UPDATE on
+            # the mandate row before touching its cycles, so two projections of
+            # the same mandate cannot interleave and read the same maximum.
+            " SELECT :cycle_id, :tenant_id, :mandate_id,"
+            "   COALESCE((SELECT max(c.seq_no) FROM cycles c"
+            "              WHERE c.tenant_id = :tenant_id"
+            "                AND c.mandate_id = :mandate_id), 0) + 1,"
+            "   :amount_paise,"
             "   :due_at, :deadline_at, :attempt_budget, :attempts_used, :state,"
-            "   :last_failure_at, :recovered_paise)"
+            "   :last_failure_at, :recovered_paise"
             " ON CONFLICT (cycle_id) DO UPDATE SET"
             "   state = EXCLUDED.state,"
             "   attempts_used = EXCLUDED.attempts_used,"

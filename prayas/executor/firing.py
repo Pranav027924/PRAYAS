@@ -220,6 +220,11 @@ async def fire_action(
         rail=cycle.rail,
         ctx=_gate_context(cycle, action, fired_at),
         as_of=fired_at.date(),
+        # §32: the gate is evaluated *at fire time*. Passing the instant makes
+        # that literally true rather than approximately — `hours_since` now
+        # measures from here instead of from whenever the process happens to
+        # look at its clock.
+        now=fired_at,
     )
 
     if not gate.allowed:

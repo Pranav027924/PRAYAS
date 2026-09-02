@@ -1500,6 +1500,31 @@ There is no username and password. This system has no user store; adding one her
 
 `request.form()` was avoided: it pulls in `python-multipart`, and a login page is not a reason to add a dependency to the money path's image. The body is url-encoded and the standard library reads it.
 
+### ADR-102 · 2026-09-02 · §24.3's permanent fix is proposed, never applied
+**Decision:** `prayas/planner/datechange.py`, called from the planner alongside the retry.
+
+`propose_date_change` had existed since Phase 10, fully specified and fully tested, and **nothing called it** — the fifth library in this codebase found built, correct and unrun, after the projector, the decision service, the aggregator and the notification planner.
+
+It is a **proposal**. Changing a mandate's debit date needs the customer's agreement and a rail-level amendment; this records that the system would recommend it, with the lift that justifies it, and stops. Anything further would be acting on a customer's mandate without asking. The retry for the current cycle is scheduled regardless — the amendment applies to future cycles, and this one still needs collecting.
+
+**Both hazards come from one source.** §24.3 compares "funding on day 5" against "debiting on day 1", which needs liquidity per *calendar* day — exactly what `segment_priors` is keyed on. A date change argued from one model while the retry timing is argued from another would be two systems disagreeing about the same customer.
+
+**A bootstrap cell is not a thin sample.** `DayOfMonthHazard.min_observations` is 30 and guards against inventing a lift from a cell where three customers happened to pay. ADR-098's `n_obs = 1` encodes "yield to any real evidence" for §21's shrinkage, not "one customer did this" — and passing it through silenced §24.3 permanently. Bootstrap tables are presented at the floor they are entitled to; observed cells always carry their own count. Their values are also read **unshrunk**, because shrinking a population model toward its own mean flattened the payday signal to within 0.05 and erased the very shape §24.3 acts on.
+
+### FINDING-P17-13 · 2026-09-02 · ✅ RESOLVED — the planner livelocked behind un-actionable cycles
+**Observed.** A seeded fleet with 5,198 treatable cycles made **zero** progress. The planner read 100 candidates every tick, skipped all 100, and read the same 100 again.
+
+**Cause.** `ORDER BY c.deadline_at` is not a *total* order. A fleet billing on one schedule shares a single deadline, so the sort collapsed to an arbitrary but stable heap order — and the first 100 rows happened to be holdout mandates. The planner correctly declines to act on a holdout, but those rows never leave the candidate set, so they blocked everything behind them permanently.
+
+**Why it hid.** Every test seeds a handful of cycles, where a stable prefix is the whole set. It needs thousands of rows *and* a population the planner deliberately skips before the two interact.
+
+**Fix.** A total order (`deadline_at, cycle_id`) and a paging cursor that resets on progress and advances only when a page yielded nothing — acting on a cycle removes it from the set, so a monotonic cursor would skip rows it never read. Three further defects surfaced in the same area and are fixed: `tick()` did not aggregate `examined`, so every pass reported zero rows read and a driving loop stopped four rounds in; `scheduled` counted insert *attempts*, so `ON CONFLICT DO NOTHING` let it report 42,400 actions against a queue of 3,900; and a page the size of the batch is ~99% skipped rows at CANARY, so the page now reads wider than it acts.
+
+### FINDING-P17-12 · 2026-09-02 · ✅ RESOLVED — the gate's `hours_since()` read the wall clock
+**Fix.** `make_hours_since(now)` is injected per evaluation exactly as `afa_free_cap` is (ADR-021), so the predicate language is unchanged and the pack still reads `hours_since(pdn_sent_at) >= 24`. `gate.evaluate` takes a `now`; the executor passes `fired_at`, which makes §32's "evaluated at fire time" literally true rather than approximately so.
+
+The wall-clock version made a 24-hour notice impossible to demonstrate in under 24 hours, and forced every fixture in the repository to anchor itself to `now() - 30h`. It is also what Phase 6's time travel needs, arriving early because seeding needed it first: a debit is now evaluated 25 *virtual* hours after its notice and passes because that time genuinely elapsed in the evaluation, not because anything was backdated.
+
 ## Spec errata found (documentation only, no code impact)
 
 - **§4 (line 193) cites "§21.4" for reply parsing residency.** §21 is the liquidity hazard model and has no subsections; the content is in **§41.3**. Found in Phase 13.
