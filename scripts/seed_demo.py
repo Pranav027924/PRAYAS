@@ -61,7 +61,11 @@ FLEET: Final[list[dict[str, Any]]] = [
         "mandates": 6120,
         "mcc": "7997",
         "amounts": (49900, 249900),
-        "due_days": (1,),
+        # Mostly the 1st, with a late-month tail: a gym bills on the join
+        # anniversary, so a real portfolio is not all on one day. A portfolio
+        # entirely on the payday peak could never warrant §24.3's date change,
+        # which would make the permanent fix structurally invisible.
+        "due_days": (1, 1, 1, 1, 26, 28),
         "fail_rate": 0.11,
     },
     {
@@ -134,6 +138,12 @@ CHRONIC_HOLDOUT_RECOVERY: Final = 0.10
 #: on `RBI-EMANDATE-PDN-24H` — a genuine refusal from a genuine condition,
 #: which is the only kind worth showing.
 SUPPRESSED_SHARE: Final = 0.06
+
+#: Share of customers who withdrew consent outright. Distinct from a contact
+#: suppression: that stops messages, this stops the debit. `DPDP-CONSENT-VALID`
+#: refuses at fire time, which is the only rule in the pack that speaks for the
+#: customer rather than the rail or the regulator's timing.
+CONSENT_WITHDRAWN_SHARE: Final = 0.02
 
 HERO_TENANT: Final = "fitfirst"
 HERO_CYCLE: Final = "cyc_7f3a91"
@@ -257,6 +267,8 @@ async def _onboard(
                     "rail": spec["rail"],
                     "mcc": spec["mcc"],
                     "amt": cap,
+                    # `consent_ref` is NOT NULL — a withdrawal is recorded on the
+                    # customer profile (§27), not by erasing the reference.
                     "consent": f"cns_{tenant_id}_{i}",
                     "created": now - timedelta(days=rng.randint(HISTORY_DAYS, HISTORY_DAYS + 200)),
                 }
@@ -292,6 +304,27 @@ async def _onboard(
                     " ON CONFLICT (tenant_id, customer_ref) DO NOTHING"
                 ),
                 suppressed,
+            )
+
+    # §27 records a withdrawal on the customer profile. Consent state is not
+    # pipeline output — the customer told the merchant, and the merchant's
+    # records are what the gate reads at fire time.
+    withdrawn = [
+        {"t": tenant_id, "c": f"cust_{tenant_id}_{i}", "ref": f"cns_{tenant_id}_{i}"}
+        for i in range(1, int(spec["mandates"]) + 1)
+        if rng.random() < CONSENT_WITHDRAWN_SHARE
+    ]
+    if withdrawn:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO customer_profiles (tenant_id, customer_id, consent_ref,"
+                    " consent_withdrawn, updated_at)"
+                    " VALUES (:t, :c, :ref, true, now())"
+                    " ON CONFLICT (tenant_id, customer_id) DO UPDATE"
+                    "   SET consent_withdrawn = true"
+                ),
+                withdrawn,
             )
 
     os.environ[f"PRAYAS_WEBHOOK_SECRET_{ref}"] = secret

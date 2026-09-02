@@ -1525,6 +1525,28 @@ It is a **proposal**. Changing a mandate's debit date needs the customer's agree
 
 The wall-clock version made a 24-hour notice impossible to demonstrate in under 24 hours, and forced every fixture in the repository to anchor itself to `now() - 30h`. It is also what Phase 6's time travel needs, arriving early because seeding needed it first: a debit is now evaluated 25 *virtual* hours after its notice and passes because that time genuinely elapsed in the evaluation, not because anything was backdated.
 
+### FINDING-P17-14 · 2026-09-03 · ✅ RESOLVED — the bootstrap prior missed every real lookup
+**Observed.** §24.3's date-change path proposed nothing across a 12,200-mandate fleet with 1,053 chronic mandates sitting on late-month debit days. The lift computed as **+0.000** for a mandate debiting on the 28th against a payday peak on the 1st.
+
+**Cause.** `load_priors` built the bootstrap keyed on `mcc="0000"`, `rail="upi_autopay"`. Real mandates carry `7997`, `5815` and `8299` across three rails, so **every lookup missed** and fell through to the flat `global_hazard`.
+
+**Why it matters far beyond the date change.** The same table feeds `presence_curve`, so the sequencer had been solving against a *flat* liquidity curve for the entire fleet — the payday shape ADR-098 exists to supply never reached the DP. Every decision was still lawful and still recorded; it was simply made without the signal. Nothing failed, which is why it survived several full seeding runs.
+
+**Fix.** `PriorTable.key_for` normalises the lookup: a bootstrap cell is a *population liquidity* model — when salary lands does not depend on merchant category or rail — so it is keyed on `(ticket_band, day, hour_band)` with mcc and rail wildcarded. Observed cells keep their real key, because a published rate genuinely is per category and per rail.
+
+**A second flattening, same table.** `PriorTable.hazard` applied §21's shrinkage to bootstrap cells. Shrinkage blends a *sample* toward the population mean; a bootstrap cell already **is** the population model, and its nominal `n_obs = 1` (which exists so real evidence displaces it) dragged every day to within 0.05 of the average. Bootstrap cells are now returned unshrunk. Measured on the presence curve: spread went from ~0.05 to **0.313**.
+
+**Result.** 469 date-change proposals where there had been none, and the lift for a day-28 mandate reads `+0.279` against §24.3's 0.25 threshold.
+
+### ADR-103 · 2026-09-03 · The permanent fix gets its own sweep, and consent reaches the gate
+**Decision (a):** §24.3's proposal runs as a per-mandate sweep, not inside the scheduling loop.
+
+Riding the candidate query tied the permanent fix to "this cycle needs a retry queued". A chronic mandate whose current cycle already had an attempt scheduled was excluded from that query and never assessed again — so the mandates most in need of a date change were the ones systematically skipped. §24.3 asks whether a mandate's debit *day* is wrong month after month; that does not stop being true because this month's retry is already booked.
+
+**Decision (b):** `consent_withdrawn` is read from `customer_profiles`, not hardcoded.
+
+`_gate_context` set it to `False` unconditionally, so `DPDP-CONSENT-VALID` appeared in every ledger citation list and **could never deny** — a customer who had withdrawn consent would still be debited. It is read from `customer_profiles.consent_withdrawn` (§27 records it on the person, and `mandates.consent_ref` is NOT NULL so a withdrawal cannot be expressed there; one person may hold several mandates). The seeded fleet now produces genuine DPDP refusals.
+
 ## Spec errata found (documentation only, no code impact)
 
 - **§4 (line 193) cites "§21.4" for reply parsing residency.** §21 is the liquidity hazard model and has no subsections; the content is in **§41.3**. Found in Phase 13.

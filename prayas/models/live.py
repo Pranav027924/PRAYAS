@@ -53,6 +53,9 @@ COLD_START_HAZARD: Final = 0.02
 
 _Key = tuple[str, int, str, int, int]
 
+#: Stands in for mcc and rail in a bootstrap cell — see `PriorTable.key_for`.
+ANY: Final = "*"
+
 
 class PriorSource(StrEnum):
     """Where the numbers in a `PriorTable` came from.
@@ -83,12 +86,38 @@ class PriorTable:
     def is_cold(self) -> bool:
         return self.source is PriorSource.COLD
 
+    def key_for(self, mcc: str, ticket: int, rail: str, day: int, band: int) -> _Key:
+        """The cell key to look up, normalised for the table's source.
+
+        The bootstrap is a *population liquidity* model: it says when salary
+        lands, which does not depend on the merchant category or the rail the
+        debit rides. Keying it on a concrete mcc meant every real lookup missed
+        — cells built for `0000` against mandates carrying `7997`, `5815` and
+        `8299` — and silently fell back to the flat global rate, erasing the
+        payday shape the sequencer exists to exploit and flattening §24.3's
+        lift to zero. Observed cells keep their real key, because a published
+        rate genuinely is per category and per rail.
+        """
+        if self.source is PriorSource.BOOTSTRAP:
+            return (ANY, ticket, ANY, day, band)
+        return (mcc, ticket, rail, day, band)
+
     def hazard(self, key: _Key) -> float:
-        """The cell's rate, shrunk toward the global rate by `n/(n+kappa)`."""
+        """The cell's rate, shrunk toward the global rate by `n/(n+kappa)`.
+
+        **Bootstrap cells are returned unshrunk.** §21's shrinkage blends a
+        *sample* toward the population mean so a thin cell cannot assert more
+        than it supports. A bootstrap cell already is the population model
+        (ADR-098), and its nominal `n_obs = 1` — which exists so real evidence
+        displaces it — would drag every day to within 0.05 of the average,
+        erasing the payday shape the sequencer and §24.3 both act on.
+        """
         cell = self.cells.get(key)
         if cell is None:
             return self.global_hazard
         rate, n_obs = cell
+        if self.source is PriorSource.BOOTSTRAP:
+            return rate
         weight = n_obs / (n_obs + self.kappa)
         return weight * rate + (1.0 - weight) * self.global_hazard
 
@@ -152,7 +181,7 @@ async def load_priors(
             },
         )
         return PriorTable(
-            cells=bootstrap_cells(mcc=bootstrap_mcc, rail=bootstrap_rail),
+            cells=bootstrap_cells(mcc=ANY, rail=ANY),
             global_hazard=bootstrap_global_hazard(),
             source=PriorSource.BOOTSTRAP,
         )
@@ -192,7 +221,9 @@ def presence_curve(
     for slot in range(horizon_slots):
         day, hour = divmod(slot, 24)
         day_of_month = ((due_day_of_month - 1 + day) % 31) + 1
-        curve[slot] = priors.hazard((mcc, band, rail, day_of_month, hour_band(float(hour))))
+        curve[slot] = priors.hazard(
+            priors.key_for(mcc, band, rail, day_of_month, hour_band(float(hour)))
+        )
     return np.clip(curve, 0.0, 1.0)
 
 
@@ -220,7 +251,7 @@ def hazard_curve(
         day_of_month = ((due_day_of_month - 1 + day) % 31) + 1
         for hour_slot in range(SLOTS_PER_DAY):
             bands[day * SLOTS_PER_DAY + hour_slot] = priors.hazard(
-                (mcc, band, rail, day_of_month, hour_slot)
+                priors.key_for(mcc, band, rail, day_of_month, hour_slot)
             )
 
     return band_to_hourly(bands, horizon=horizon_slots)

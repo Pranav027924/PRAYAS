@@ -117,8 +117,15 @@ async def fire_action(
                 "SELECT c.cycle_id, c.mandate_id, c.amount_paise, c.state,"
                 "       c.attempts_used, c.attempt_budget, c.deadline_at,"
                 "       c.pdn_sent_at, m.customer_id, m.state AS mandate_state, m.rail,"
-                "       m.consent_ref, m.mcc"
+                "       m.consent_ref, m.mcc,"
+                # §27 records a withdrawal on the customer, not the mandate:
+                # `mandates.consent_ref` is NOT NULL and one person may hold
+                # several mandates. LEFT JOIN because a customer with no
+                # profile has withdrawn nothing.
+                "       COALESCE(p.consent_withdrawn, false) AS consent_withdrawn"
                 "  FROM cycles c JOIN mandates m ON m.mandate_id = c.mandate_id"
+                "  LEFT JOIN customer_profiles p"
+                "         ON p.tenant_id = c.tenant_id AND p.customer_id = m.customer_id"
                 " WHERE c.tenant_id = :tenant_id AND c.cycle_id = :cycle_id"
                 " FOR UPDATE OF c"
             ),
@@ -349,7 +356,15 @@ def _gate_context(cycle: Any, action: ClaimedAction, now: datetime) -> dict[str,
         "pdn_sent_at": cycle.pdn_sent_at,
         "hours_since_pdn": hours_since_pdn,
         "consent_ref": cycle.consent_ref,
-        "consent_withdrawn": False,
+        # Derived, not asserted. This was hardcoded `False`, which meant
+        # `DPDP-CONSENT-VALID` could never deny and a customer who had
+        # withdrawn consent would still be debited — the rule was in the pack,
+        # in the ledger's citation list, and unable to fire.
+        #
+        # Read from `customer_profiles.consent_withdrawn`, which is where §27
+        # records it — `mandates.consent_ref` is NOT NULL, so a withdrawal
+        # cannot be expressed there, and a person may hold several mandates.
+        "consent_withdrawn": bool(cycle.consent_withdrawn),
         "is_next_day_debit": False,
         "attempts_used": cycle.attempts_used,
         "attempt_budget": cycle.attempt_budget,

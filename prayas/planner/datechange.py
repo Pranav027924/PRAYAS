@@ -32,10 +32,14 @@ from hashlib import sha256
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from prayas.adoption.cohort import Arm, arm_for
+from prayas.adoption.stages import Stage, may_fire
+from prayas.inference.bands import ticket_band
 from prayas.ledger.chain import append
 from prayas.models.live import PriorSource, PriorTable
 from prayas.observability import metrics
 from prayas.retention.interventions import (
+    CHRONIC_CYCLES,
     DayOfMonthHazard,
     InterventionError,
     propose_date_change,
@@ -71,22 +75,12 @@ def hazard_from_priors(priors: PriorTable, *, mcc: str, rail: str, ticket: int) 
     for day in range(1, 32):
         # Band 0 is the pre-10:00 window — legal on every rail, and the band a
         # salary credit actually lands in.
-        key = (mcc, ticket, rail, day, 0)
+        key = priors.key_for(mcc, ticket, rail, day, 0)
         cell = priors.cells.get(key)
-        if bootstrap:
-            # The cell rate *unshrunk*. §21's `w = n/(n+kappa)` blends a sample
-            # toward the population mean, and with the bootstrap's nominal
-            # `n_obs = 1` it pulls every day to within 0.05 of the average —
-            # erasing the payday shape that §24.3 exists to act on. A bootstrap
-            # cell already *is* the population model, so shrinking it toward
-            # its own mean subtracts signal and adds nothing.
-            p_by_day[day] = cell[0] if cell else priors.global_hazard
-            observations[day] = BOOTSTRAP_OBSERVATIONS
-        else:
-            # Observed cells are samples, so they get the shrinkage and their
-            # own support.
-            p_by_day[day] = priors.hazard(key)
-            observations[day] = cell[1] if cell else 0
+        # `PriorTable.hazard` already returns bootstrap cells unshrunk, so the
+        # rate is read the same way for both sources. Only the *support* differs.
+        p_by_day[day] = priors.hazard(key)
+        observations[day] = BOOTSTRAP_OBSERVATIONS if bootstrap else (cell[1] if cell else 0)
     return DayOfMonthHazard(p_by_day=p_by_day, observations=observations)
 
 
@@ -226,3 +220,71 @@ async def maybe_propose(
         },
     )
     return True
+
+
+#: Mandates examined per sweep.
+SWEEP_BATCH = 500
+
+_CHRONIC = text(
+    "SELECT m.mandate_id, m.mcc, m.rail,"
+    "       max(c.amount_paise) AS amount_paise,"
+    "       max(extract(day FROM c.due_at))::int AS debit_day,"
+    "       max(c.cycle_id) AS cycle_id"
+    "  FROM mandates m JOIN cycles c ON c.mandate_id = m.mandate_id"
+    " WHERE m.tenant_id = :tenant_id"
+    "   AND NOT EXISTS (SELECT 1 FROM interventions i"
+    "                    WHERE i.mandate_id = m.mandate_id AND i.kind = 'date_change')"
+    " GROUP BY m.mandate_id, m.mcc, m.rail"
+    " HAVING count(*) FILTER (WHERE c.attempts_used > 0) >= :chronic"
+    " LIMIT :batch"
+)
+
+
+async def sweep(
+    conn: AsyncConnection,
+    *,
+    tenant_id: str,
+    stage: Stage,
+    priors: PriorTable,
+    decided_at: datetime,
+    batch: int = SWEEP_BATCH,
+) -> int:
+    """Propose date changes across a tenant's chronic mandates.
+
+    Its own pass, deliberately. Riding the scheduling loop tied the permanent
+    fix to "this cycle needs a retry queued" — so a chronic mandate whose
+    current cycle already had an attempt scheduled was excluded from the
+    candidate query and never assessed again. §24.3 is a judgement about the
+    *mandate*: whether its debit day is wrong, month after month. That question
+    does not become irrelevant because this month's retry is already booked.
+    """
+    if not may_fire(stage):
+        # SHADOW decides but changes nothing, and OBSERVE does neither. A
+        # proposal is a recommendation to a merchant about a customer's
+        # mandate, so it belongs to the stages that act.
+        return 0
+
+    rows = list(
+        await conn.execute(
+            _CHRONIC,
+            {"tenant_id": tenant_id, "chronic": CHRONIC_CYCLES, "batch": batch},
+        )
+    )
+    proposed = 0
+    for row in rows:
+        if arm_for(stage, tenant_id=tenant_id, mandate_id=str(row.mandate_id)) is not Arm.TREATMENT:
+            continue
+        if await maybe_propose(
+            conn,
+            tenant_id=tenant_id,
+            mandate_id=str(row.mandate_id),
+            cycle_id=str(row.cycle_id),
+            debit_day=int(row.debit_day),
+            mcc=str(row.mcc or "0000"),
+            rail=str(row.rail),
+            ticket_band=ticket_band(int(row.amount_paise)),
+            priors=priors,
+            decided_at=decided_at,
+        ):
+            proposed += 1
+    return proposed

@@ -239,3 +239,29 @@ async def test_a_settled_cycle_needs_no_notice(owner_engine: AsyncEngine) -> Non
     assert not outcome.sent
     assert outcome.reason == "cycle_settled"
     assert (await _cycle(owner_engine))["pdn_sent_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_withdrawn_consent_denies_the_debit(owner_engine: AsyncEngine) -> None:
+    """DPDP-CONSENT-VALID must be able to fire.
+
+    `_gate_context` hardcoded `consent_withdrawn: False`, so the rule was in
+    the pack, listed in every ledger citation, and structurally incapable of
+    denying — a customer who had withdrawn consent would still be debited.
+    """
+    from prayas.executor.firing import _gate_context
+
+    class _Cycle:
+        amount_paise = 249900
+        mcc = "7997"
+        pdn_sent_at = datetime.now(UTC) - timedelta(hours=30)
+        consent_ref = "cns_live"
+        consent_withdrawn = True
+        attempts_used = 1
+        attempt_budget = 4
+
+    ctx = _gate_context(_Cycle(), _action(), datetime.now(UTC))
+    assert ctx["consent_withdrawn"] is True, "a withdrawal must reach the gate"
+
+    _Cycle.consent_withdrawn = False
+    assert _gate_context(_Cycle(), _action(), datetime.now(UTC))["consent_withdrawn"] is False

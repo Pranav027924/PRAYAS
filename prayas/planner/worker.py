@@ -49,7 +49,6 @@ from prayas.db.tenancy import system_transaction, tenant_transaction
 from prayas.domain.rails import PDN_CUTOFF_HOUR_IST, adapter_for
 from prayas.executor.claiming import STATE_CLAIMED, STATE_PENDING, active_tenants
 from prayas.executor.notice import ACTION_TYPE_NOTICE
-from prayas.inference.bands import ticket_band
 from prayas.inference.cause import infer, is_terminal
 from prayas.models.live import PriorTable, load_priors, presence_curve
 from prayas.notify.planner import (
@@ -61,7 +60,7 @@ from prayas.notify.planner import (
 from prayas.notify.planner import plan as notification_plan
 from prayas.observability import metrics
 from prayas.observability.logging import configure
-from prayas.planner.datechange import maybe_propose as maybe_propose_date_change
+from prayas.planner.datechange import sweep as sweep_date_changes
 from prayas.retention.revocation import RevocationFeatures, RevocationModel
 from prayas.sequencer.dp import BoolArray, solve
 from prayas.sequencer.economics import (
@@ -329,6 +328,12 @@ async def plan_tenant(
         if not may_decide(stage):
             return TickResult(0, 0, 0, 0, 0, examined=0)
 
+        # §24.3's permanent fix is a judgement about the mandate, so it gets its
+        # own sweep rather than riding the scheduling candidates (ADR-102).
+        proposed = await sweep_date_changes(
+            conn, tenant_id=tenant_id, stage=stage, priors=priors, decided_at=decided_at
+        )
+
         rows = list(
             await conn.execute(
                 _CANDIDATES,
@@ -343,7 +348,7 @@ async def plan_tenant(
             )
         )
 
-        considered = scheduled = stopped = shadowed = proposed = 0
+        considered = scheduled = stopped = shadowed = 0
         for row in rows:
             if considered >= BATCH:
                 break
@@ -361,25 +366,6 @@ async def plan_tenant(
                     continue
 
             considered += 1
-
-            # §24.3 ranks the permanent fix above a retry: moving the debit day
-            # eliminates the failure rather than recovering from it monthly.
-            # Proposed alongside the retry rather than instead of it — an
-            # amendment needs the customer's agreement, and this cycle still
-            # needs collecting in the meantime (ADR-102).
-            if await maybe_propose_date_change(
-                conn,
-                tenant_id=tenant_id,
-                mandate_id=str(row.mandate_id),
-                cycle_id=str(row.cycle_id),
-                debit_day=row.due_at.day,
-                mcc=str(row.mcc or "0000"),
-                rail=str(row.rail),
-                ticket_band=ticket_band(int(row.amount_paise)),
-                priors=priors,
-                decided_at=decided_at,
-            ):
-                proposed += 1
 
             attempts_remaining = int(row.attempt_budget) - int(row.attempts_used)
             code = await _latest_decline_code(conn, tenant_id, row.mandate_id)
