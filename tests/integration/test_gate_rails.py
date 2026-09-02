@@ -31,7 +31,14 @@ pytestmark = [pytest.mark.db, requires_db]
 TODAY = date(2026, 8, 31)
 
 #: The reviewable source of truth (ADR-020).
-RULEPACK_PATH = Path(__file__).resolve().parents[2] / "prayas" / "gate" / "rules" / "rulepack.yaml"
+RULEPACK_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "packages"
+    / "prayas-rulepack"
+    / "src"
+    / "prayas_rulepack"
+    / "rulepack.yaml"
+)
 
 #: 11:00 IST — inside NPCI's morning peak, so unlawful for UPI Autopay and
 #: unremarkable for every other rail.

@@ -21,11 +21,11 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Final
 
+from prayas_rulepack.predicate import PredicateError, safe_eval
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from prayas.gate.predicate import PredicateError, safe_eval
 from prayas.observability import metrics
 
 log = logging.getLogger(__name__)

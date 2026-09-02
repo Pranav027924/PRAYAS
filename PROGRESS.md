@@ -24,29 +24,51 @@ Phase 17 — Live integration
 | 15 | Hardening | CLOSED | 2026-08-30 |
 | 16 | Console | CLOSED | 2026-08-30 |
 | 17 | Live integration | IN PROGRESS (1 of 4; blocked on credentials) | — |
-| 18–19 | see Execution Playbook | not started | — |
+| 18 | Pilot | BLOCKED (needs a real merchant, credentials, elapsed time) | — |
+| 19 | Publication | CLOSED | 2026-08-31 |
 
 ## Exit criteria — current phase (Phase 17 — Live integration)
-_Evidence 2026-08-30. **One of four met. The phase stays OPEN.** CI mirror green: 1,329 tests, 90.22% coverage, `mypy --strict` on 189 files, bandit clean. Goal: "wired to reality, not a notebook."_
+_Updated 2026-09-01. **One of four met; a second substantially advanced. The phase stays OPEN.** Goal: "wired to reality, not a notebook."_
 
-- [x] **Stage transitions gated by their exit criteria in code, not in a document** — every cell of §44's exit-criteria table is a predicate, each asserted to block on its own. `advance` refuses with the unmet list; the executor consults stage at fire time and fails closed to `OBSERVE`
-- [ ] **Full lifecycle in test mode: mandate → PDN → debit → failure → decision → retry → success** — blocked, no credentials
-- [ ] **Contract tests green nightly** — the *harness* is built and green against fixtures, but the fixtures are constructed, not recorded. This is not the criterion
-- [ ] **Reconciliation finds zero discrepancies over 7 days** — blocked; there is no provider to reconcile against, and a 7-day claim from a shorter run would be worthless
+- [x] **Stage transitions gated by their exit criteria in code, not in a document** — every cell of §44's exit-criteria table is a predicate, each asserted to block on its own. `advance` refuses with the unmet list; the executor consults stage at fire time and fails closed to `OBSERVE`. **Strengthened 2026-09-01**: §44's `mandate_share` and `holdout_pct` were defined and read nowhere, so CANARY would have treated the whole portfolio and FULL kept no control arm. `adoption/cohort.py` (ADR-095) enforces both.
+- [~] **Full lifecycle in test mode: mandate → PDN → debit → failure → decision → retry → success** — **the internal pipeline now runs end to end and the external half does not.** A signed webhook produces a projected cycle and a scheduled debit, with no test fixture in the path:
 
-**No artifact.** The phase artifact is "a real webhook producing a real decision producing a real (test-mode) debit". It does not exist.
+      webhook -> events_raw -> projector -> cycle inv_pilot_001 (executing, 1/4)
+              -> planner   -> scheduled_actions pilot:inv_pilot_001:1
+                              debit_attempt, slot 38, fire_at 2026-09-03 07:41 UTC
 
-**FINDING-P17-01** records exactly what is and is not established, and the contract fixtures are marked `"_source": "constructed"` with a test asserting none is `recorded` — so a green contract suite cannot be mistaken for the criterion it does not meet.
+  What is still missing is the ends: no mandate has been *created* through Razorpay, and no debit has been *fired* at it. The adapter exists (ADR-092) and its endpoint is confirmed live, but nothing has charged.
+- [ ] **Contract tests green nightly** — the *harness* is green against fixtures, but the fixtures are constructed, not recorded. One recorded fixture now exists (FINDING-P17-05's live error envelope); the rest do not. This is not the criterion.
+- [ ] **Reconciliation finds zero discrepancies over 7 days** — not started. `fetch_by_key`'s query path is confirmed against the live API, but a 7-day claim needs 7 days.
 
-**What Phase 17 did deliver**, and it is the half that carries §44's intent — "it is a product feature, not a rollout plan":
+**No artifact.** "A real webhook producing a real decision producing a real (test-mode) debit." The first two now exist; the debit does not.
 
-- The five stages, their behaviours, and their gates as code
-- `OBSERVE` and `SHADOW` fire **nothing**, asserted by driving `fire_action` and observing refusal — and the opposite direction asserted too, so a check that refused everything would not pass
-- A missing stage reads as `OBSERVE`, never as full rollout
-- The holdout is never retired: `holdout_pct` is a property of the stage, so `FULL` keeps 15%
-- Count-of-bad-things criteria are only meaningful beside their volume criterion, pinned by its own test
+**Blockers cleared since 2026-08-30:** Subscriptions enabled on the account (P17-03), `httpx` promoted so the adapter runs in the image (P17-02), and the three missing services built — projector (ADR-093), decision service (ADR-096), aggregator (ADR-097) — which together were FINDING-P17-04 and FINDING-P17-07.
 
-**Open findings carried:** FINDING-P9-01, FINDING-P8-01 (partially resolved), FINDING-P11-01 (mechanism resolved by ADR-075), FINDING-P11-02, FINDING-P13-01, **FINDING-P17-01**.
+**Blockers remaining, and neither is code:** a single-tenant deployment can never publish a prior (FINDING-P17-09, §27's 3-contributor floor), so the planner declines every cycle on a one-merchant pilot; and the aggregator's owner-role access is an open Class A (FINDING-P17-08).
+
+**Open findings carried:** FINDING-P9-01, FINDING-P8-01 (partially resolved), FINDING-P11-01 (mechanism resolved by ADR-075), FINDING-P11-02, FINDING-P13-01, **FINDING-P17-01**, **FINDING-P17-08** (Class A), **FINDING-P17-09**.
+
+### Phase 19 — Publication · closed 2026-08-31
+_Evidence 2026-08-31. **Four of four met.** Taken out of order deliberately: the Playbook states "Phase 19 depends only on Phase 2 and can ship at any point after it", and Phase 18 is fully blocked._
+
+- [x] **Rule pack installable and runnable standalone** — `packages/prayas-rulepack`, one dependency (PyYAML). A test executes it in a subprocess with `prayas` unimportable, and another asserts no module in the package imports from the parent
+- [x] **Conformance suite passes on a clean install** — 40 tests. Every rule on **both sides** of its boundary: 09:59:59 lawful, 10:00:00 not, and every NPCI window edge
+- [x] **Audit report reproducible by a third party** — `prayas-audit` prints the finding, its method, and the exact rule versions used. Deterministic for a given `--as-of`
+- [x] **Documentation sufficient for someone with no context** — README with a worked example, CONTRIBUTING with the one rule about changing rules
+
+**Artifact — §8's finding, reproducibly:**
+
+```
+The default recurring-retry behaviour widely deployed today — retries on
+days 1, 3, 5 at 10:00 IST — produces 30,000 debit attempts outside NPCI
+execution windows and 30,000 debits without valid 24-hour pre-debit notice,
+per 10,000 cycles.
+```
+
+Every attempt breaches both rules. The report states its own scope: this is a property of the **schedule**, not of any merchant's customers, and it says nothing about how often those attempts succeed.
+
+**Two defects found by running it, not by reviewing it** — see FINDING-P19-01. The audit's first working run printed **zero** window violations, because its default date predated the window rule's own `as_of`. And the pack shipped rules it could not evaluate, because `RBI-EMANDATE-AFA-CAP` needs a value the main gate injects from the database.
 
 ## Closed phases
 
@@ -1182,6 +1204,301 @@ Five tests caught it, and **only on a clean build** — they passed in isolation
 ### ADR-090 · 2026-08-30 · Contract fixtures declare their provenance
 **Decision:** Every fixture in `tests/contract/fixtures/` carries `"_source"`, and a test asserts none is `recorded` while FINDING-P17-01 stands.
 **Rationale:** A contract suite that passes against invented fixtures looks exactly like one that passes against real captures. Making provenance a field the tests assert on is what stops a green run being read as evidence it is not — the same failure as Phase 15's vacuous verifier, caught before it could happen rather than after.
+
+### ADR-091 · 2026-08-31 · The rule pack is a package, and it is the source of truth
+**Approved 2026-08-31.** **Decision:** `packages/prayas-rulepack/` — an installable package carrying the rules, the sandboxed evaluator, the §8 baseline policy, a YAML loader and the audit CLI, depending on **PyYAML alone**. The rulepack, `predicate.py` and `baseline.py` were **moved** there, not copied; `prayas.gate` imports from the package.
+**Options:** in-repo package published nowhere (chosen); prepare a separate repo for the owner to push; publish to PyPI.
+**Rationale:** Vendoring a copy would put one compliance rule in two files, which is exactly the Phase 14 failure — the copies drift and the ledger cites a version that no longer describes what ran. Moving it means the artifact a third party installs *is* the one governing decisions here. Nothing is published externally; the criterion is "installable and runnable standalone", which a source install satisfies.
+**Ships `py.typed`.** Without PEP 561's marker a consumer type-checking against the package is told it is untyped — every annotation present, none of them visible. Caught by the repository's own `mypy --strict`, which stopped seeing the package's types the moment it became an installed dependency rather than a local directory.
+
+**Pinned by** `test_rulepack_is_source_of_truth.py`: exactly one `rulepack.yaml` and one `predicate.py` in the tree, and `engine.safe_eval is prayas_rulepack.safe_eval` — the same function object, not a re-export.
+
+**The mutation-testing scope moved with the code, and nearly did not.** §40.10's criterion is "mutation testing on gate predicates: no surviving mutants", scoped by `mutmut run "prayas.gate.*"`. Moving the evaluator out of that path would have left the scope pointing at a directory the file no longer lived in — every test would still pass and the strongest guarantee on the most safety-critical file would silently be gone. A test now asserts the scope follows the evaluator.
+
+### FINDING-P19-01 · 2026-08-31 · ✅ RESOLVED — the audit reported a zero it had not measured
+**Observed.** The first working run of `prayas-audit` printed §8's sentence with **"0 debit attempts outside NPCI execution windows"** — for a policy that fires at 10:00 IST, squarely inside the NPCI peak.
+
+**Cause.** The audit defaulted to `as_of = 2026-06-01`. `NPCI-AUTOPAY-WINDOW`'s own `as_of` is 2026-08-01, so the rule was not yet in force and was never loaded. The loader was correct; the *report* was not, because a rule that was never evaluated produced a zero indistinguishable from a rule that found nothing.
+
+**Why it matters.** §8 calls this "the single artifact from this project most likely to be read by someone who has never heard of Prayas". It was about to publish a headline number of zero for the violation it exists to demonstrate.
+
+**Fix.** The audit defaults to *now*, so it reflects regulation currently in force, and `AuditFinding.complete` reports whether both headline rules were actually evaluated. When either is not in force the sentence reads `INCOMPLETE: … not in force on <date>, so this run did not measure it` rather than printing a zero.
+
+**Corrected finding:** 30,000 window violations and 30,000 notice violations per 10,000 cycles — all three attempts breach both rules. **Pinned by** `test_the_audit_refuses_to_report_a_zero_it_did_not_measure`.
+
+**A second gap found the same way:** the pack shipped rules it could not evaluate. `RBI-EMANDATE-AFA-CAP` needs `afa_free_cap`, which the main gate injects from the database; a third party had no way to supply it. `evaluate()` now derives it from the pack's own `afa_caps` table. Only a real run revealed this — the rules loaded and validated perfectly.
+
+### ADR-092 · 2026-09-01 · The Razorpay adapter maps transport failure to AMBIGUOUS, and hangs idempotency on `receipt`
+**Decision:** `prayas/executor/razorpay.py` implements `RailProvider` against Razorpay's REST API.
+
+Three choices carry the money safety:
+
+1. **A timeout is `AMBIGUOUS`, never `RETRIABLE`.** `httpx.TimeoutException` or `NetworkError` on a debit means the debit may have happened. §31 forbids re-issuing it as a fresh charge, so the attempt holds its budget slot until `fetch_by_key` resolves it. Only errors where Razorpay itself reports that nothing was created map to `RETRIABLE` (429/502/503/504), and an *unrecognised* error code resolves to `AMBIGUOUS` rather than `DECLINED` — wrongly holding a slot costs a delayed retry, wrongly releasing one costs a second debit.
+2. **The idempotency key travels as `receipt`, not `notes`.** Razorpay's recurring-charge endpoint takes no idempotency header. `receipt` is unique per order server-side; `notes` is unconstrained free-form metadata. Using `notes` would look equivalent and be entirely unenforced. `test_idempotency_key_travels_as_receipt` pins the field.
+3. **`fetch_by_key` issues only a GET.** §31 says reconcile by key, and a query is the only safe way — re-submitting to discover an outcome is indistinguishable from trying again. `test_fetch_by_key_only_ever_issues_a_get` pins this.
+
+**Not** reimplemented here: inbound webhook signature verification. `prayas/ingest/verify.py` already owns it, with rotation windows this adapter's first draft lacked. A second copy was written and deleted before it could drift — the same mistake as duplicating the 24h notice lead into the rail adapters (FINDING-P14-01).
+
+20 unit tests, `httpx.MockTransport`, no network.
+
+### FINDING-P17-02 · 2026-09-01 · ✅ RESOLVED — `httpx` is a dev dependency and the adapter needs it at runtime
+**Observed.** `prayas/executor/razorpay.py` imports `httpx`. In `pyproject.toml`, `httpx` sits in `[dependency-groups] dev`, added as a consequence of `fastapi.testclient`. The runtime image does not contain it:
+
+```console
+$ docker run --rm --entrypoint python prayas-api:latest -c "import httpx"
+ModuleNotFoundError: No module named 'httpx'
+```
+
+**Why it matters.** Tests pass locally because dev dependencies are installed there. The image builds green and fails on import the moment the executor tries to fire — the identical failure shape to the Dockerfile not copying `packages/`, and invisible to every check that runs outside the container.
+
+**Fix.** Approved as a Class A on 2026-09-01. `httpx>=0.28` moved into the main `dependencies` list citing ADR-092, and removed from the dev group where it was a `fastapi.testclient` consequence. Verified in a rebuilt image: `httpx 0.28.1 present` and `RazorpayProvider satisfies RailProvider: True`.
+
+### FINDING-P17-03 · 2026-09-01 · ✅ RESOLVED — the Razorpay account has Subscriptions disabled
+**Observed.** Probing the live test API with the supplied keys:
+
+```
+payments       200
+customers      200
+subscriptions  401  Unauthorized
+plans          401  Unauthorized
+```
+
+**Cause.** The keys are valid — `payments` and `customers` authenticate. The 401 is Razorpay reporting that the **Subscriptions product is not activated on the account**, not a credential fault.
+
+**Why it matters.** In Razorpay a recurring mandate *is* a subscription. Until the product is enabled the gate, sequencer, console and audit all run, but no mandate can be created and no debit fired — which is exactly the lifecycle Phase 17's remaining three criteria demand. FINDING-P17-01 attributed the block to "credentials this repository does not have"; it is now narrower and actionable: the credentials exist, the product does not.
+
+**Fix.** Resolved 2026-09-01 with a new test key (`rzp_test_TCgDQty…`) on an account with the product enabled. All four endpoints now return 200: `payments`, `customers`, `subscriptions`, `plans`.
+
+**Validated with the working key.** `GET /orders?receipt=<unknown>` returns `{count: 0, items: []}` inside a `{count, entity, items}` envelope — exactly what `fetch_by_key` assumes, so the reconciliation path's "no record means the debit did not happen" branch is confirmed against the live API rather than a mock. This is the first assumption in ADR-092 to be checked against reality instead of `httpx.MockTransport`.
+
+**Still unconfirmed:** the charge endpoint itself. `GET /payments/create/recurring` returns `404 no Route matched`, which proves nothing — the gateway routes by method, so a GET against a POST-only route 404s. Confirming it requires either a deliberately-invalid POST (a 400 `BAD_REQUEST_ERROR` would prove the route exists; a 404 would disprove it) or a real charge. Both are external writes and neither has been done. FINDING-P17-01 stands for the debit path.
+
+**Also.** The test keys were shared in a chat transcript. Test mode moves no money so nothing is at risk, but they should be regenerated before the habit sets.
+
+### FINDING-P17-04 · 2026-09-01 · ✅ RESOLVED — the live pipeline has no middle
+**Observed.** Driving the running stack end to end: a correctly signed webhook is verified, deduplicated and persisted to `events_raw`. Then nothing happens. `cycles`, `attempts`, `decisions` and `scheduled_actions` all stay at zero, indefinitely.
+
+**Cause.** Two links of §17.2's flow — `payment.failed → ingest → projector → decision-svc → executor → ledger` — exist as libraries but are not run by any process.
+
+- `prayas/ingest/projector.py` is called only from `prayas/sim/load.py` and tests. No service runs it, so `events_raw.processed_at` is never advanced.
+- `INSERT INTO scheduled_actions` appears **only in `tests/`** — nine call sites, all fixtures. No production code schedules an action.
+- The sequencer runs only inside `prayas/measure/harness.py`, an offline measurement loop over simulated cycles.
+
+The whole repository has exactly three runnable entry points: `prayas.api.main`, `prayas.executor.worker`, `prayas.ledger.verify`.
+
+**Why it matters.** Every individual component is built, tested and correct. The executor claims, revalidates the gate at fire time, appends to the ledger and reconciles — and it will do all of that faithfully for an empty queue forever. The system cannot make a decision, so Phase 17's first exit criterion ("full lifecycle in test mode: mandate → PDN → debit → failure → decision → retry → success") is unreachable, and so is any deployment that is supposed to do work rather than merely stay up.
+
+This was invisible to the test suite by construction: every integration test seeds `scheduled_actions` directly, which is the correct way to test the executor in isolation and precisely why nothing noticed that no caller exists. It was also invisible to CI, to the health check, and to the deployment smoke test — the stack comes up green.
+
+**Status (2026-09-01, option A chosen).** Half built.
+
+**Projector — DONE.** `prayas/ingest/worker.py` (ADR-093) is a loop around `project_tenant`, added to Compose as its own service. Verified against the running stack: a signed webhook now produces a projected cycle — `inv_gym2_001  state=executing  attempts=1/4  amount=250000  deadline=2026-09-21`. `events_raw` drains, `processed_at` advances, `projector_lag_seconds` is reported every pass.
+
+**Decision service — BLOCKED, and by more than effort.** `solve()` needs a hazard or presence curve per cycle. Every feature and serving function in `prayas/models/` is typed on `prayas.sim.generate.SimulatedCycle`, and **no live-serving path exists**: there is no way to produce a curve for a row out of `cycles`. The models were built, fitted and measured entirely against simulated cycles.
+
+The good news is that the seam is clean. `truth` — the counterfactual — is read in exactly one place (`features.py:326`, via `funding_slot` at `:400`) and only to generate *labels* for training. Serving reads only `amount_paise`, `customer_id`, `cycle_id`, `due_at`, `observables`, `rail`. So a live cycle can satisfy the same structural contract without ground truth, and a Protocol over those six fields would let `SimulatedCycle` and a `LiveCycle` share the serving path with no leakage risk.
+
+What still needs deciding before that path is built, all of it money-path and therefore **Class A**: which model serves live decisions (V0 or V1 — FINDING-P8-01 recorded that V1's end-to-end lift is +0.00%), where `p_recoverable` comes from at serving time, how customer history is assembled from `events_raw`, and how the issuer is identified on a live payment.
+
+### FINDING-P17-05 · 2026-09-01 · ✅ RESOLVED — our malformed requests were being recorded as customer declines
+**Observed.** A diagnostic POST to `/payments/create/recurring` with a bogus token (approved as a Class A external write; unchargeable by construction) returned:
+
+```json
+{"error": {"code": "BAD_REQUEST_ERROR", "description": "does_not_exist is not a valid id",
+           "source": "internal", "step": "payment_initiation",
+           "reason": "input_validation_failed", "metadata": {}}}
+```
+
+Two things fell out of it. The route **exists**, confirming ADR-092's endpoint choice. And Razorpay reuses `BAD_REQUEST_ERROR` for *our* malformed requests and for *genuine bank declines* alike.
+
+**Cause.** `_interpret` mapped every `BAD_REQUEST_ERROR` to `DECLINED`, taking `error.reason` as the decline code. A validation failure would therefore have been written as a customer decline with `decline_code="input_validation_failed"`.
+
+**Why it matters.** §21's hazard model learns from decline codes. Our own bug — a wrong mandate id, a malformed amount — would enter the model as evidence about that customer's liquidity, and the cycle would carry a refusal their bank never issued. It could also drive customer-facing messaging about a payment that was never attempted. The failure is silent: the mapping looks reasonable, every mock test passed, and only the live envelope reveals that `code` alone cannot separate the two cases.
+
+**Fix.** `source`/`reason` discriminate. `source: "internal"` or `reason: "input_validation_failed"` maps to `RETRIABLE` — definitively nothing happened, no decline attributed, and no budget slot consumed (`RETRIABLE` is absent from `HOLDS_BUDGET`). It logs at ERROR, and the retry fails identically, which is the correct loud failure for a defect. Genuine declines (`source: "bank"`) are unaffected.
+
+**Pinned by** `test_our_malformed_request_is_not_recorded_as_a_customer_decline` and `test_a_genuine_bank_decline_is_still_declined`, the first carrying the recorded live envelope as its fixture (ADR-090 `_source: recorded`).
+
+### ADR-093 · 2026-09-01 · The projector is its own service, and it is only a loop
+**Decision:** `prayas/ingest/worker.py`, added to Compose as `projector`.
+
+All the correctness already lived in `projector.project_tenant` — the batch claim under `FOR UPDATE SKIP LOCKED`, and the watermark advancing in the *same transaction* as the projection so an event cannot be stamped processed while its projection rolls back. The service is deliberately nothing but a loop around it: putting logic here would put it on the wrong side of that transaction boundary.
+
+Its own process for ADR-042's reason. Projection is a read-heavy fold over a mandate's full event history, so its cost scales with history length; sharing a pool or a core with the fire path would let one tenant's backlog slow every debit. Replicas are safe — `SKIP LOCKED` hands them disjoint batches.
+
+`MAX_PASSES_PER_TENANT = 5` bounds how long one backlogged tenant holds the loop, giving the same round-robin fairness the executor's claim loop has. `consumer_lag` is reported even on passes that consume nothing: a lag that stays high with zero throughput is exactly the condition worth alerting on (§43's 30s threshold), and it is invisible if the gauge is only written when work happens.
+
+### FINDING-P17-06 · 2026-09-01 · ✅ RESOLVED — the mandate id is the subscription id, and the bootstrap invented one
+**Observed.** With a mandate seeded as `acme_gym_mandate_1`, a webhook carrying a subscription entity projected to nothing. `events_raw` held a mandate_id of `sub_acme_1` — an id no `mandates` row had — and the projector counted `stale_transition{reason=unknown_mandate}` and returned before touching any cycle.
+
+**Cause.** `extract_mandate_id` reads `payload.subscription.entity.id` **ahead of** the payment's `token_id`. That precedence is correct and load-bearing: in Razorpay a recurring mandate *is* a subscription. The defect was in `scripts/bootstrap_tenant.py`, which minted an arbitrary `<tenant>_mandate_1`. Any event carrying a subscription entity — which is every real subscription webhook — was therefore attributed to a mandate that did not exist.
+
+**A second defect in the same script.** It seeded `state='active'`. `project_mandate` folds the event history from `CREATED` and rejects unjustified states, so the first projection silently reset it. A mandate is `active` because an authentication event says so, not because a seeder asserted it.
+
+**Fix.** `--mandate-id` defaults to `sub_<tenant_id>_1`, and the seeded state is `created`. Both are documented in the script's docstring as the reasons they are what they are.
+
+**Also learned:** a cycle needs `payload.subscription.entity.current_end`. Without it `_upsert_cycle` records `cycle_deadline_unresolved` and skips — refusing to invent a deadline, because §23.4 stops collection on `now() > deadline_at` and a wrong value stops it at the wrong time. A bare `payment.failed` carrying only the payment entity cannot create a cycle, which is a real constraint on what Razorpay must be configured to send.
+
+### ADR-094 · 2026-09-01 · V0 from cross-tenant priors is what serves a live cycle
+**Decision:** `prayas/models/live.py`. A live hazard/presence curve is read from `segment_priors`, not from a fitted per-tenant model.
+
+**V0, not V1, and the usual argument is not the deciding one.** V1 wins on calibration (log-loss 0.0837 → 0.0696, ECE 0.0017) and its end-to-end lift is `+1.014% ± 2.425%`, a 95% interval containing zero (FINDING-P11-02) — that alone is a coin toss. What settles it: **V1 needs a fitted model and a new tenant has no history to fit one on.** §44 starts every tenant in `OBSERVE`. V0 served from cross-tenant priors is the only thing that can price a first cycle at all, which is also why "kill V1, degrade to V0" was already an exit criterion. V1 drops in behind the same signature once a tenant has history.
+
+**Cross-tenant is legal here and the distinction matters.** Invariant 8 forbids an individual profile crossing a tenant boundary. `segment_priors` is keyed on `(mcc, ticket_band, rail, day_of_month, hour_band)` with `CHECK (n_obs >= 50)`, and `aggregate()` counts contributors precisely so no cell traces to one tenant. A k-anonymised rate is not a profile. Read through `system_transaction` because the table is deliberately not tenant-scoped.
+
+**A bug this found in its own first draft.** The curve was expanded from bands to hours with `band_to_hourly`, which converts a band *hazard* into the per-hour hazard whose k-fold survival matches it. That is right for an event rate and wrong for **presence**, which is a state: if funds are present during an evening band they are present in every hour of it, not in a k-th root of one. Measured against seeded priors the error was ~3x — `max 0.1257` against the correct `0.4158` — biasing every decision toward stopping. `presence_curve` expands by repetition; `hazard_curve` keeps `band_to_hourly` for the hazard reading. `segment_priors.hazard` is successes over attempts, which is what makes it readable as presence at all.
+
+### ADR-095 · 2026-09-01 · Cohort assignment is a hash, and the holdout is a second, independent draw
+**Decision:** `prayas/adoption/cohort.py`, enforcing §44's `mandate_share` and `holdout_pct`.
+
+Both fields existed in `BEHAVIOUR` and **were read nowhere**. A tenant advanced to CANARY would have treated its entire portfolio — the one thing a canary exists to prevent — and FULL would have had no control arm, which is exactly what Phase 18's "recovered ₹X measured against their own holdout" depends on.
+
+Assignment hashes `(tenant_id, mandate_id, salt)` rather than drawing randomly. Membership must be stable forever: a mandate that drifts between arms turns the final comparison into one between two populations that never existed. Hashing is stable across restarts and replicas with no stored roster.
+
+Share and holdout use **different salts**. Deriving both from one hash would correlate them, so the holdout would always be drawn from one end of the share's ordering — a control arm systematically unlike the treatment. `test_holdout_is_independent_of_the_share_draw` buckets treated mandates by their share draw and asserts the holdout rate is flat across buckets, which is what catches that.
+
+Because the draw is stable, advancing a stage *adds* mandates rather than reshuffling them (`test_ramping_adds_mandates_rather_than_reshuffling_them`), so the before/after a ramp is comparable.
+
+### ADR-096 · 2026-09-01 · The planner schedules and deliberately does not gate
+**Decision:** `prayas/planner/worker.py` — §17.2's `decision-svc`, the other half of FINDING-P17-04.
+
+**It does not evaluate the gate.** §32 requires re-evaluation at *fire* time with `as_of = NOW()`, because rules and state both move between scheduling and firing. A gate check here would be a second, staler opinion, and trusting it instead of the fire-time one is precisely how invariant 3 breaks. The executor re-reads everything.
+
+Three guards precede any decision: `may_decide(stage)` (OBSERVE ingests only), `may_act_on(...)` (ADR-095's share and holdout), and no action already `pending`/`claimed` for that cycle — without the third the planner queues a fresh attempt every tick. `action_id` is `tenant:cycle:attempts_used`, so a replayed tick collides on the primary key instead of queueing a second debit.
+
+Stopping is recorded as an outcome, not a failure: §23.3 lets the DP decline when no legal slot carries positive expected value, and `best_slot` returning `None` is that answer.
+
+**Verified end to end against the running stack**, with no test fixture anywhere in the path: a signed webhook produced `cycle inv_pilot_001 (executing, 1/4)` and then `scheduled_actions pilot:inv_pilot_001:1 — debit_attempt, slot 38, fire_at 2026-09-03 07:41 UTC`.
+
+### FINDING-P17-07 · 2026-09-01 · ✅ RESOLVED — nothing builds `segment_priors`, so the priors the planner reads stay empty
+**Observed.** `prayas/memory/aggregate.py` exposes `aggregate()` and `publish()`. **Neither is called from anywhere in `prayas/`.** `segment_priors` is therefore empty on any real deployment, and `load_priors` falls through to `COLD_START_HAZARD`.
+
+**What that does.** At the cold-start rate the DP stops on every cycle, and correctly: attempting risks `0.04 × ₹30,000 = ₹1,200` of expected continuation value (ADR-037's `Δr`, §23.4's continuation term) to gain about `₹25`. The arithmetic is right; the input is absent. Confirmed live — the planner logged `planner.stop` on every tick until priors were seeded, then scheduled slot 38 immediately.
+
+**It is the same failure as FINDING-P17-04, a third time.** A library is built, tested and correct, and no process runs it. That now accounts for the projector, the decision service, and the aggregator.
+
+**Fix.** `prayas/memory/worker.py` (ADR-097), cadence-agnostic like `ledger.verify`: `--interval 0` runs one pass for a scheduled invocation, a positive value runs resident.
+
+**Not a deadlock, which is worth stating.** The obvious worry — no priors, so no attempts, so no observations, so no priors — does not apply, because §44 puts `OBSERVE` first precisely so the *merchant's own* baseline retries generate the failure and capture events the aggregate is built from. Prayas does not need to have fired anything. But the aggregator must actually run during OBSERVE for that to happen, and today it does not.
+
+### ADR-097 · 2026-09-01 · The aggregator reads the event log, not the attempt log
+**Decision:** `prayas/memory/worker.py` supplies the collection step between `aggregate()` and `publish()`.
+
+**Source is `events_raw`, and the choice is load-bearing.** §44 starts every tenant in `OBSERVE`, where Prayas fires nothing — so `attempts` is empty exactly when priors are most needed. `events_raw` meanwhile carries the *merchant's own* baseline retries and their outcomes. Aggregating the observed stream is what lets a tenant reach CANARY with a usable curve without Prayas having debited anyone. Reading `attempts` instead would deadlock: no priors, so no attempts, so no priors.
+
+Cadence-agnostic, following `ledger.verify`: `--interval 0` (the default) runs one pass and exits, which is what a scheduled invocation wants; a positive value runs resident like the other workers. So the deployment can choose without the code changing.
+
+Bands are computed in Python rather than in SQL so `inference.bands` stays the single definition. An event whose cycle does not exist is skipped rather than counted under a guessed ticket band — a made-up number in a cross-tenant prior is worse than a missing one.
+
+### FINDING-P17-08 · 2026-09-01 · OPEN (Class A) — the aggregator is the first non-Alembic owner user
+**Observed.** `publish()` must run as the owner: `segment_priors` is cross-tenant and `prayas_app` holds SELECT on it only. But `config.owner_database_url()` states its contract plainly — *"Used by Alembic only. The application must never call this"* (ADR-004), because the owner bypasses RLS by ownership.
+
+**Status.** The worker reads `PRAYAS_DATABASE_URL_OWNER` directly rather than routing through that function, so the rule is visibly broken in one place instead of quietly relaxed everywhere. Which resolution is right is **Class A**: (a) accept a second owner process, as `migrate` already is; (b) a SECURITY DEFINER publisher, matching `prayas_tenant_ids()` (ADR-046), which keeps the app role narrow and needs a migration; (c) grant `prayas_app` write on `segment_priors`, which widens the app role and is the weakest of the three. Not decided.
+
+### FINDING-P17-09 · 2026-09-01 · OPEN (external) — a single-tenant deployment can never publish a prior
+**Observed.** §27's floors are `MIN_COHORT = 50` observations and `MIN_CONTRIBUTORS = 3` distinct tenants. A deployment with fewer than three tenants therefore withholds **every** cell, however much data it has.
+
+**Why it matters here.** The stated plan is a pilot on one merchant — the operator's own business. That tenant will accumulate events, the aggregator will run correctly, and `segment_priors` will stay empty forever. The planner will then decline every cycle on cold-start priors, which is arithmetically correct and operationally useless.
+
+The aggregator logs `aggregator.all_withheld` with the reason rather than staying silent, because a healthy pipeline with nothing to publish and a pipeline that can never publish look identical from the outside.
+
+**Resolutions, none taken.** Ship a bootstrap prior derived from the simulator or published industry data and mark it as such; or run the pilot with three or more tenants; or lower the floors, which weakens §27's k-anonymity and should be resisted. The first is the only one that is both safe and available to a single-merchant pilot.
+
+### ADR-098 · 2026-09-01 · A derived bootstrap prior, so a first tenant can act
+**Decision:** `prayas/models/bootstrap.py`, served by `load_priors` when `segment_priors` holds no published cell.
+
+§27's 3-contributor floor means a single-merchant deployment can never publish a cell (FINDING-P17-09), and on the flat cold-start rate the DP declines everything. This is the prior that lets a first tenant run.
+
+**Derived, not invented.** The numbers come from the archetype mix `prayas/sim/config.py` already declares as §38's model of Indian recurring-debit liquidity: 45% paid on the 1st, 20% on the 7th, 25% gig, 10% chronically dry, with presence decaying after a credit as money is spent. The resulting curve peaks on the 1st (0.469) and again on the 7th (0.441), falling to 0.083 by month end — the payday shape the sequencer exists to exploit.
+
+**It stays visibly a prior.** `PriorTable.source` reports `bootstrap` against `observed`, the load logs which is in play, and every cell carries `n_obs = 1` so §21's shrinkage lets any real cell clearing §27's floors dominate it immediately. The bootstrap yields to evidence rather than competing with it.
+
+Deliberately conservative: being wrong high fires attempts the economics do not support and spends a customer's retry budget on a guess; being wrong low only delays recovery.
+
+### FINDING-P17-10 · 2026-09-01 · ✅ RESOLVED — the planner used ADR-037's placeholder, so it declined everything
+**Observed.** With a realistic bootstrap prior the planner still logged `planner.stop` on every cycle, for every ticket size and every due date.
+
+**Cause.** `revocation_delta()` returns ADR-037's constant `Δr = 0.04` when no model is supplied, and the planner supplied none. That constant is flagged in its own comment as a placeholder — *"Phase 10 replaces this with §22's revocation model"* — and applies 4% at **every** slot. With ADR-036's `W = 12 × A`, an attempt therefore costs `0.04 × 12A = 0.48A` in expected continuation value regardless of when it fires, so the break-even is `P(funds present) > 0.48`. No population-level liquidity prior reaches that, so the DP declined every cycle. Correct arithmetic on the wrong input.
+
+**Why it hid.** Everything downstream was right: the DP, the economics, the gate, the executor. `revocation_delta()`'s fallback is a documented, tested behaviour, and calling it without a model looks entirely ordinary at the call site.
+
+**Fix.** The planner supplies a `RevocationModel` and §22's `RevocationFeatures`, read off projected state. `marginal_delta` is then the risk accrued by *waiting* rather than a flat per-attempt charge:
+
+| | slot 0 | slot 48 | slot 168 | slot 719 |
+|---|---|---|---|---|
+| placeholder | 0.04000 | 0.04000 | 0.04000 | 0.04000 |
+| §22 model | 0.00000 | 0.00272 | 0.00948 | 0.03995 |
+
+The planner now schedules at **slot 25** — the first hour past §30's 24h notice lead — which is ADR-062's stated intent: time-dependent `Δr` "is what finally gives the sequencer a reason to act early rather than at the last legal slot".
+
+A model with no fitted cells is an honest construction, not a stub: `monthly_hazard` falls back to the global rate below `MIN_CELL_OBSERVATIONS`, which says "no cell has enough mandates to differ from the population" — exactly true on a new tenant.
+
+**Pinned by** `test_the_revocation_model_is_what_lets_the_planner_act`, which asserts the placeholder is flat, the model is ~0 at slot 0, and risk accrues with delay. A test that only checked "it schedules" would pass with the placeholder restored.
+
+### FINDING-P17-11 · 2026-09-01 · ✅ RESOLVED — the notification planner is not wired, so every debit is denied
+**Observed.** Driving the full lifecycle against the running stack, the fire-time gate returns **DENY** on `RBI-EMANDATE-PDN-24H` and cancels the action. The other three rules pass. No debit can therefore succeed.
+
+**Cause.** `prayas/notify/planner.py` decides when a notice may lawfully be sent and is fully tested. **Nothing calls it.** The decision service schedules `debit_attempt` and never a notice, so the 24-hour pre-debit notice is never sent and the debit is never lawful.
+
+**This is the fourth instance of one pattern** — a library built, tested, correct, and run by no process. The projector, the decision service and the aggregator were the first three (FINDING-P17-04, FINDING-P17-07). This one remains.
+
+**Not a defect in the gate.** The DENY is the system working: §30 requires the notice, none was sent, so the debit does not happen. The ledger records all four rules with citations.
+
+**Fix (ADR-099, ADR-100).** The planner now schedules a `pdn_notice` alongside every debit, and the executor routes notices away from the rail. Verified end to end: all four rules ALLOW and the debit fires.
+
+Only the *transport* remains external — a DLT-registered sender to reach a real phone (`docs/BLOCKERS.md` §1.2). The console channel stands in for it, exactly as `FakeProvider` stands in for the rail in test mode.
+
+### ADR-099 · 2026-09-01 · A notice is not a debit, and the executor routes it separately
+**Decision:** `prayas/executor/notice.py`, dispatched from `worker.drain_tenant` on `action_type == "pdn_notice"`.
+
+`RBI-EMANDATE-PDN-24H` reads `cycles.pdn_sent_at`, and **nothing wrote that column**. Every debit was denied at fire time, correctly and permanently (FINDING-P17-11).
+
+Three properties separate a notice from a debit, and collapsing any of them would be a defect:
+
+1. **It never touches the attempt budget.** §1's "one execution plus up to three retries" counts *debits*. Charging a message against the regulator's allowance would spend a retry on an SMS.
+2. **It never reaches the rail.** No `submit_debit`, no provider idempotency key, no money.
+3. **It is suppressible.** §24.6 — a system that cannot choose silence over-messages its own portfolio. A contact suppression makes "send nothing" the recorded outcome.
+
+**`pdn_sent_at` is written only after the channel accepts, in the same transaction.** Writing it first would mean a failed send still unlocked the debit: the gate would see a notice that never left the building and the resulting debit would be unlawful while looking compliant. That is the one ordering error here that would matter.
+
+**A schema constraint caught a real omission.** `interventions.decision_id` is NOT NULL, which refused the first implementation. It was right to: a message sent to a person is an action, and §32 requires actions to be recorded. The notice now appends to the same hash chain as the debit it precedes.
+
+**Suppression is looked up by pseudonym, and by both forms.** `contact_suppressions` is keyed on `pseudonymise(tenant_id, customer_id)` (§27), but erasure rewrites `mandates.customer_id` to that pseudonym in place — so after a forget request the stored id already *is* the ref, and hashing it again would look up a value never written. Checking only one form would leave an erased customer receiving messages.
+
+### ADR-100 · 2026-09-01 · The notice constraint belongs in the legality mask, not after it
+**Decision:** `_notice_feasible_mask` is ANDed into the DP's legal slots before solving.
+
+§30.1 imposes two constraints that **interact**: the notice must lead the debit by ≥24h, and it must fall inside the contact window. Choosing the debit first and asking about the notice afterwards produces a slot the notice planner then refuses, and the pair is abandoned.
+
+Observed live at 00:30 IST: the DP picked slot 25, every candidate notice instant landed outside the contact window, and the planner scheduled **nothing** — logging `no lawful send instant between the decision and the debit`. With the mask folded in, the DP moved the debit to **slot 32** and both actions were scheduled with exactly 24h of notice.
+
+A debit nobody may lawfully notice is not a lawful debit, so the constraint belongs where the other three legality constraints already live.
+
+### FINDING-P17-12 · 2026-09-01 · OPEN (Class A) — the gate's `hours_since()` reads the wall clock
+**Observed.** A demonstration that pins the executor's `now` still had `RBI-EMANDATE-PDN-24H` deny a debit 25 hours after its notice.
+
+**Cause.** `predicate._hours_since` computes `datetime.now(tz=UTC) - moment`. The evaluation instant is ignored. The engine even builds `hours_since_pdn` from the pinned `now` and puts it in the context — and the rule calls the wall-clock function instead, so the two disagree.
+
+**What it does and does not break.** Replay is **unaffected**: `measure/replay.py` compares *stored* `compliance_checks` rather than re-evaluating, so §30.1's replay property holds. What it does mean is that the gate is not a pure function of `(context, as_of)`. Every gate test in the repository works around it by anchoring fixtures to `datetime.now() - 30h`, which is why it has never surfaced as a failure.
+
+**Consequence for demonstration:** a single cycle cannot be shown end to end in under 24 hours, so `scripts/demo_recovery.py` runs in two acts.
+
+**Class A** because it touches the compliance evaluator. Options: (a) have `_hours_since` read an evaluation instant injected alongside `afa_free_cap`, which already has that mechanism (ADR-021); (b) rewrite the predicate to use the context's `hours_since_pdn`, which the engine already supplies; (c) leave it, and accept that gate behaviour is wall-clock-dependent. (a) is narrowest and makes the gate deterministic at a supplied instant. Not decided, not applied.
+
+### ADR-101 · 2026-09-02 · The console gets an operator view, and it cannot act
+**Decision:** `prayas/console/overview.py` plus `/console/` — the pipeline end to end for one tenant: adoption stage, mandates and their cohort arm, cycles with attempts and notice status, the queue with fire times, and the ledger.
+
+§5 names five people who need to see this system and gives each a surface. Phase 16 built payloads for three screens and HTML for one — an API for a UI that did not exist. Enough for a compliance reviewer holding a decision id; no use to anyone asking *"is it working?"*.
+
+**Read-only by construction, and asserted.** Every action this system takes goes through the scheduled-action path so it is re-checked at fire time (§32) and written to the ledger. A control on this page would be a second way to move money, outside both. `test_the_console_exposes_no_way_to_act` walks the route table and fails if a mutating `/console` route appears that is not login, logout or the simulator.
+
+**The cookie is transport, not a second authority.** A browser cannot attach a bearer header to a plain navigation, so a signed token is accepted from an `HttpOnly` cookie as well as the header — the *same* signature verified either way, so §18 holds: the tenant still comes from a verified token and never from anything the client sets. A token in the query string is refused, because that is the carrier that leaks into logs, history and referrers.
+
+There is no username and password. This system has no user store; adding one here would put a second, weaker path to the same data beside the signed one. The login page takes a pasted token.
+
+**The mandate's cohort arm is on the page** (ADR-095) because without it a healthy mandate sitting untouched looks like a bug rather than the control arm it is.
+
+`request.form()` was avoided: it pulls in `python-multipart`, and a login page is not a reason to add a dependency to the money path's image. The body is url-encoded and the standard library reads it.
 
 ## Spec errata found (documentation only, no code impact)
 

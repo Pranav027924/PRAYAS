@@ -43,6 +43,7 @@ class Settings:
     database_url_app: str
 
     @classmethod
+    @classmethod
     def from_env(cls) -> Settings:
         return cls(
             env=os.environ.get("PRAYAS_ENV", "local"),
@@ -62,3 +63,48 @@ def owner_database_url() -> str:
     rights and bypasses RLS by ownership; the app role owns nothing.
     """
     return _require("PRAYAS_DATABASE_URL_OWNER")
+
+
+@dataclass(frozen=True, slots=True)
+class RazorpayCredentials:
+    """Razorpay API credentials and the webhook signing secret.
+
+    Outbound only. `key_id`/`key_secret` authenticate calls *we* make.
+
+    Inbound webhook signatures are a separate mechanism entirely and are not
+    configured here: `webhook_secrets` holds a per-tenant `secret_ref`, and the
+    material lives in `PRAYAS_WEBHOOK_SECRET_<REF>` so that several secrets can
+    be valid at once during a rotation (ADR-014). Adding a single
+    `RAZORPAY_WEBHOOK_SECRET` here would look equivalent and would quietly
+    defeat rotation.
+
+    Absent credentials are not an error. §44's `OBSERVE` and `SHADOW` stages
+    fire nothing and need no provider, so a Tier 0 deployment runs without
+    these; `configured` is how a caller asks rather than catching an exception.
+    """
+
+    key_id: str | None
+    key_secret: str | None
+    base_url: str = "https://api.razorpay.com/v1"
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.key_id and self.key_secret)
+
+    @property
+    def is_test_mode(self) -> bool:
+        """Test keys carry an `rzp_test_` prefix; live keys `rzp_live_`.
+
+        Surfaced so a deployment can *assert* which one it is holding. A live
+        key reaching a staging environment is the mistake worth making
+        impossible to overlook.
+        """
+        return bool(self.key_id and self.key_id.startswith("rzp_test_"))
+
+    @classmethod
+    def from_env(cls) -> RazorpayCredentials:
+        return cls(
+            key_id=os.environ.get("RAZORPAY_KEY_ID") or None,
+            key_secret=os.environ.get("RAZORPAY_KEY_SECRET") or None,
+            base_url=os.environ.get("RAZORPAY_BASE_URL", "https://api.razorpay.com/v1"),
+        )

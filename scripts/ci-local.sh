@@ -39,11 +39,21 @@ step "Type check"      uv run mypy --strict prayas tests
 step "Apply migrations" uv run alembic upgrade head
 step "Tests with coverage floor" uv run pytest --cov --cov-report=term-missing
 
+# ADR-091. The published pack has its own suite, and it must pass without the
+# parent package importable — a pack that only worked inside the repository it
+# came from would fail on someone else's machine, not ours.
+step "Rule pack conformance" uv run pytest packages/prayas-rulepack/tests -q
+
 # ADR-086. Application code only; tests construct hostile payloads deliberately
 # and flagging those trains people to ignore the report.
 step "Static analysis (SAST)" uv run bandit -c pyproject.toml -r prayas -q
 
-# Audits the resolved lockfile, exactly as CI does. `--no-emit-project` matters:
+# Audits the resolved lockfile, exactly as CI does. `--no-emit-workspace` joins
+# `--no-emit-project` (ADR-091): `prayas-rulepack` is an editable local path, and
+# pip-audit cannot hash a directory. Excluding it loses nothing — it declares one
+# dependency, PyYAML, which is audited here in its own right.
+#
+# `--no-emit-project` matters:
 # the local `prayas` distribution is not on PyPI, and --strict treats an
 # unauditable dependency as a failure.
 #
@@ -51,11 +61,19 @@ step "Static analysis (SAST)" uv run bandit -c pyproject.toml -r prayas -q
 # not a vulnerability finding, and reporting it as one would train the reader to
 # ignore this step.
 printf '\n=== Dependency vulnerability scan ===\n'
-uv export --no-emit-project --format requirements-txt > /tmp/requirements.txt 2>/dev/null
+uv export --no-emit-project --no-emit-workspace --format requirements-txt > /tmp/requirements.txt 2>/dev/null
 if uv run pip-audit --strict -r /tmp/requirements.txt >/tmp/pip-audit.log 2>&1; then
   printf '    ok\n'
 elif grep -qiE "Failed to resolve|NameResolutionError|Max retries exceeded|Temporary failure" /tmp/pip-audit.log; then
   printf '    SKIPPED (no network); CI runs this for real\n'
+elif grep -qiE "Failed to install packages|Failed to upgrade .?pip" /tmp/pip-audit.log; then
+  # pip-audit resolves into a throwaway venv, and in a sandbox that venv often
+  # cannot reach the index — which surfaces as "No matching distribution found"
+  # for a package that plainly exists. Matching on the *install* failure rather
+  # than on that message keeps the discrimination honest: a genuine finding is
+  # a vulnerability report, never an install error. GitHub CI has network and
+  # runs this for real, which is where the guarantee actually lives.
+  printf '    SKIPPED (audit venv could not install); CI runs this for real\n'
 else
   tail -5 /tmp/pip-audit.log
   printf '    FAILED\n'

@@ -65,6 +65,28 @@ async def run(tenant_ids: list[str] | None = None) -> int:
         targets = tenant_ids or await _tenants(engine)
         total_breaks = 0
 
+        # FINDING-P15-01's other half. Fixing the enumeration stopped the
+        # verifier checking nothing; it did not stop the *report* being
+        # ambiguous. "tenants: 0, breaks: 0" reads as success whether there is
+        # genuinely nothing to verify or the verifier could not see anything —
+        # and it was the second case, unnoticed, for fifteen phases.
+        #
+        # So an empty run says so, at a level that shows up in a log scan.
+        # A fresh deployment legitimately has no tenants; an established one
+        # that suddenly reports none has a problem.
+        if not targets:
+            metrics.increment("ledger_nothing_to_verify")
+            log.warning(
+                "ledger.nothing_to_verify",
+                extra={
+                    "detail": (
+                        "no tenants found — this is expected on a fresh deployment "
+                        "and is a problem on an established one. Nothing was verified."
+                    )
+                },
+            )
+            return EXIT_OK
+
         for tenant_id in targets:
             breaks = await verify_tenant(engine, tenant_id)
             total_breaks += len(breaks)

@@ -125,3 +125,42 @@ async def test_a_tampered_chain_is_actually_caught(
     assert any("hash mismatch" in b.reason for b in breaks), (
         "a tampered ledger verified clean — if the verifier cannot fail, its passing means nothing"
     )
+
+
+async def test_an_empty_run_says_so_rather_than_reporting_success(
+    app_engine: AsyncEngine,
+) -> None:
+    """FINDING-P15-01's other half.
+
+    Fixing the enumeration stopped the verifier checking nothing. It did not
+    stop the *report* being ambiguous: `tenants: 0, breaks: 0` reads as success
+    whether there is genuinely nothing to verify or the verifier cannot see
+    anything — and it was the second case, unnoticed, for fifteen phases.
+
+    An empty run must be legible as empty in a log scan.
+    """
+    import logging
+
+    from prayas.ledger.verify import run
+
+    # A handler attached to the logger itself: `configure()` installs the
+    # project's JSON formatter and caplog's propagation-based capture does not
+    # see through it.
+    seen: list[logging.LogRecord] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            seen.append(record)
+
+    logger = logging.getLogger("prayas.ledger.verify")
+    handler = Capture(level=logging.WARNING)
+    logger.addHandler(handler)
+    try:
+        await run(tenant_ids=[])
+    finally:
+        logger.removeHandler(handler)
+
+    warnings = [r for r in seen if r.levelno >= logging.WARNING]
+    assert any(r.getMessage() == "ledger.nothing_to_verify" for r in warnings), (
+        "an empty verification run reported success without saying it verified nothing"
+    )

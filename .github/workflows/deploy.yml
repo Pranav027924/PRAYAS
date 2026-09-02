@@ -1,0 +1,155 @@
+name: Deploy
+
+# Deploys only what CI has already passed. `workflow_run` rather than `push`
+# so a red build cannot reach an environment: the image is built from the
+# commit CI verified, not from whatever main happens to point at now.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+
+concurrency:
+  # One deploy at a time per environment. Two concurrent migrations against one
+  # database is the failure this prevents.
+  group: deploy-${{ github.event.inputs.environment || 'staging' }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository }}
+
+jobs:
+  build:
+    # A CI run that failed must not produce an image at all.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Build the commit CI verified, not the branch tip.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - id: meta
+        run: echo "tag=${{ github.event.workflow_run.head_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # Tagged by commit SHA, never only by `latest`. A rollback needs a
+          # name for the thing being rolled back to.
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify the image can import the compliance gate
+        # A smoke test on the artifact itself. The Dockerfile once omitted
+        # `packages/`, which produced an image that built cleanly and could not
+        # load the rule evaluator — CI was green and the deploy was broken.
+        run: |
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.meta.outputs.tag }} \
+            python -c "
+          import prayas_rulepack
+          from prayas.gate import engine
+          assert engine.safe_eval is prayas_rulepack.safe_eval
+          rules = prayas_rulepack.load_rules(action_type='debit_attempt', rail='upi_autopay')
+          assert rules, 'no rules loaded'
+          print(f'image ok: {len(rules)} rules, sandbox wired')
+          "
+
+  migrate:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Apply migrations
+        # Runs as the OWNER role. The application role owns nothing and cannot
+        # create tables (ADR-004) — that separation is the point, so the deploy
+        # needs a different credential from the one the app runs with.
+        env:
+          PRAYAS_DATABASE_URL_OWNER: ${{ secrets.PRAYAS_DATABASE_URL_OWNER }}
+          PRAYAS_APP_DB_PASSWORD: ${{ secrets.PRAYAS_APP_DB_PASSWORD }}
+          PRAYAS_ENV: ${{ github.event.inputs.environment || 'staging' }}
+        run: uv run alembic upgrade head
+
+      - name: Verify the ledger still verifies
+        # Migrations must not break the hash chain. Checked here rather than
+        # discovered by the nightly verifier hours later.
+        env:
+          PRAYAS_DATABASE_URL_APP: ${{ secrets.PRAYAS_DATABASE_URL_APP }}
+          PRAYAS_DATABASE_URL_OWNER: ${{ secrets.PRAYAS_DATABASE_URL_OWNER }}
+          PRAYAS_APP_DB_PASSWORD: ${{ secrets.PRAYAS_APP_DB_PASSWORD }}
+          PRAYAS_ENV: ${{ github.event.inputs.environment || 'staging' }}
+        run: uv run python -m prayas.ledger.verify
+
+  deploy:
+    needs: [build, migrate]
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    steps:
+      - name: Deploy the image
+        # TARGET-SPECIFIC — see docs/DEPLOYMENT.md. Every option there must run
+        # in an Indian region: §41.3 requires all primary stores, backups and
+        # replicas to be in India, and the application sits beside them.
+        run: |
+          echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ needs.build.outputs.tag }}"
+          echo "Digest: ${{ needs.build.outputs.digest }}"
+          echo
+          echo "No deploy target is configured yet. docs/DEPLOYMENT.md lists the"
+          echo "options and what each needs. Until one is wired, this job only"
+          echo "reports the artifact that would have been deployed — it does not"
+          echo "pretend to have deployed it."
+          exit 0
+
+  smoke:
+    needs: deploy
+    if: vars.PRAYAS_BASE_URL != ''
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    steps:
+      - name: Health check
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "${{ vars.PRAYAS_BASE_URL }}/health"; then
+              echo "healthy after ${i} attempt(s)"; exit 0
+            fi
+            sleep 10
+          done
+          echo "never became healthy" >&2
+          exit 1

@@ -19,12 +19,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from prayas.console import screens
+from prayas.console import overview, screens
 from prayas.console.auth import (
     BATCH_RESULT,
     DECISION_REPLAY,
@@ -47,19 +48,38 @@ router = APIRouter(prefix="/console", tags=["console"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
+#: Name of the cookie carrying the console token.
+SESSION_COOKIE = "prayas_console"
+
+
 async def principal(
+    request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> Principal:
-    """Establish who is asking, from the bearer token alone.
+    """Establish who is asking, from a signed token.
+
+    Accepted from the `Authorization` header or from an `HttpOnly` cookie. The
+    cookie exists so a person can open a page in a browser, which cannot attach
+    a bearer header to a plain navigation — **it is transport, not a second
+    authority.** The same signature is verified either way, so §18 still holds:
+    the tenant comes from a verified token and never from anything the client
+    can set. A token in a query string was rejected for the opposite reason —
+    it lands in logs, history and referrers.
 
     A 401 carries no detail about *which* check failed. Distinguishing "no such
     tenant" from "bad signature" tells someone probing which half to keep
     working on.
     """
-    if not authorization or not authorization.lower().startswith("bearer "):
+    token: str | None = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+    else:
+        token = request.cookies.get(SESSION_COOKIE)
+
+    if not token:
         raise HTTPException(status_code=401, detail="authentication required")
     try:
-        return verify(authorization.split(" ", 1)[1].strip())
+        return verify(token)
     except AuthError as exc:
         raise HTTPException(status_code=401, detail="authentication failed") from exc
 
@@ -83,6 +103,76 @@ def _guard(who: Principal, screen: str) -> None:
         authorise(who, screen)
     except AuthError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@router.get("/login", response_class=HTMLResponse)
+async def login_form(request: Request) -> HTMLResponse:
+    """Paste a token to open the console in a browser.
+
+    Deliberately not a username and password. This system has no user store —
+    tokens are minted by whatever issues credentials (`console.auth.issue`) —
+    and inventing an account system here would put a second, weaker path to the
+    same data beside the signed one.
+    """
+    return templates.TemplateResponse(request=request, name="login.html", context={})
+
+
+@router.post("/login")
+async def login(request: Request) -> RedirectResponse:
+    """Verify a pasted token and keep it in an `HttpOnly` cookie."""
+    # Parsed from the raw body rather than via `request.form()`, which pulls in
+    # `python-multipart`. The form is url-encoded and the standard library
+    # already reads that, so a login page is not a reason to add a dependency
+    # to the money path's image.
+    body = (await request.body()).decode("utf-8", errors="replace")
+    token = parse_qs(body).get("token", [""])[0].strip()
+    try:
+        verify(token)
+    except AuthError:
+        return RedirectResponse(url="/console/login?error=1", status_code=303)
+
+    response = RedirectResponse(url="/console/", status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        httponly=True,  # unreadable from JavaScript, so an XSS cannot lift it
+        samesite="lax",  # not sent on cross-site POSTs
+        secure=request.url.scheme == "https",
+        max_age=8 * 3600,
+    )
+    return response
+
+
+@router.post("/logout")
+async def logout() -> RedirectResponse:
+    response = RedirectResponse(url="/console/login", status_code=303)
+    response.delete_cookie(SESSION_COOKIE)
+    return response
+
+
+@router.get("/", response_class=HTMLResponse)
+async def overview_page(
+    request: Request, who: Annotated[Principal, Depends(principal)]
+) -> HTMLResponse:
+    """**The operator's view.** The pipeline end to end for one tenant.
+
+    Read-only. Every mutation in this system goes through the scheduled-action
+    path so it is gated at fire time and recorded in the ledger; a button here
+    would bypass both.
+    """
+    async with tenant_transaction(_engine(request), who.tenant_id) as conn:
+        data = await overview.build(conn, who.tenant_id)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="overview.html",
+        context={
+            "o": data,
+            "who": who,
+            "rupees": overview.rupees,
+            "stages": overview.stage_order(),
+        },
+    )
 
 
 @router.get("/replay/{decision_id}")

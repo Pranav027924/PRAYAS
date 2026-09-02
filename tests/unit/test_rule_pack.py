@@ -21,11 +21,18 @@ from typing import Any
 
 import pytest
 import yaml
+from prayas_rulepack.predicate import safe_eval
 
 from prayas.gate.engine import make_afa_free_cap
-from prayas.gate.predicate import safe_eval
 
-RULEPACK = Path(__file__).resolve().parents[2] / "prayas" / "gate" / "rules" / "rulepack.yaml"
+RULEPACK = (
+    Path(__file__).resolve().parents[2]
+    / "packages"
+    / "prayas-rulepack"
+    / "src"
+    / "prayas_rulepack"
+    / "rulepack.yaml"
+)
 PACK: dict[str, Any] = yaml.safe_load(RULEPACK.read_text(encoding="utf-8"))
 RULES: dict[str, dict[str, Any]] = {r["rule_id"]: r for r in PACK["rules"]}
 CAPS: dict[str, int] = {c["mcc"]: int(c["cap_paise"]) for c in PACK["afa_caps"]}
@@ -34,7 +41,8 @@ AFA_FUNCS = {"afa_free_cap": make_afa_free_cap(CAPS)}
 
 
 def check(rule_id: str, ctx: dict[str, Any]) -> bool:
-    return safe_eval(RULES[rule_id]["predicate"], ctx, AFA_FUNCS)
+    passed: bool = safe_eval(RULES[rule_id]["predicate"], ctx, AFA_FUNCS)
+    return passed
 
 
 def hours_ago(hours: float) -> datetime:
@@ -138,7 +146,7 @@ def test_rbi_afa_cap(label: str, amount_paise: int, mcc: str | None, permitted: 
 
 def test_afa_cap_denies_when_no_ceiling_is_configured() -> None:
     """Fail closed: an unconfigured ceiling must not mean an unlimited one."""
-    from prayas.gate.predicate import PredicateError
+    from prayas_rulepack.predicate import PredicateError
 
     empty = {"afa_free_cap": make_afa_free_cap({})}
     with pytest.raises(PredicateError, match="no AFA-free ceiling"):
@@ -278,7 +286,7 @@ def test_a_default_afa_ceiling_exists() -> None:
 
 def test_every_predicate_passes_the_sandbox() -> None:
     """A rule that cannot be parsed would deny at runtime — catch it here."""
-    from prayas.gate.predicate import validate
+    from prayas_rulepack.predicate import validate
 
     for rule_id, rule in RULES.items():
         try:

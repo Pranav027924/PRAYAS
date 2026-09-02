@@ -16,15 +16,26 @@ dependencies = [
     "pyyaml>=6.0",                  # ADR-026; rule pack format chosen in ADR-020
     "numpy>=2.1",                   # ADR-029; reproducible streams for the simulator
     "scikit-learn>=1.9.0",  # ADR-064; §21's V1 GBM hazard and isotonic calibration
-    "jinja2>=3.1.6",
+    "jinja2>=3.1.6",           # ADR-087; the console's three screens
+    "httpx>=0.28",             # ADR-092; the Razorpay adapter's HTTP client
+    # ADR-091. The rule pack is the source of truth for compliance rules and
+    # for the sandboxed evaluator, and the gate loads from it — so the artifact
+    # published to third parties is the one actually governing decisions here,
+    # not a copy of it that can drift.
+    "prayas-rulepack",
 ]
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+prayas-rulepack = { workspace = true }
 
 [dependency-groups]
 dev = [
     "pytest>=8.3",           # project standard
     "pytest-asyncio>=0.24",  # consequence of pytest + async stack
     "hypothesis>=6.112",     # ADR-016, §40.3 property-based tier
-    "httpx>=0.28",           # required by fastapi.testclient; consequence of FastAPI
     "pytest-cov>=6.0",       # consequence of ADR-009 coverage floor
     "ruff>=0.8",             # project standard
     "mypy>=1.13",            # project standard
@@ -141,6 +152,13 @@ skips = ["B101"]
 [tool.mutmut]
 # The whole package is copied so `mutants/` stays importable — the root
 # conftest imports prayas.db, and copying only gate/ breaks collection.
-# Scope is applied at run time instead: `mutmut run "prayas.gate.*"`.
-source_paths = ["prayas/"]
+#
+# ADR-091 moved the predicate evaluator into `packages/prayas-rulepack`, so the
+# run-time scope moved with it. §40.10's criterion is "mutation testing on gate
+# predicates: no surviving mutants", and leaving the scope pointed at
+# `prayas.gate.*` after the code left that path would have quietly dropped the
+# strongest guarantee on the most safety-critical file in the project.
+#
+#   mutmut run "prayas_rulepack.predicate.*"
+source_paths = ["prayas/", "packages/prayas-rulepack/src/"]
 pytest_add_cli_args_test_selection = ["tests/unit/"]

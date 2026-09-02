@@ -1,0 +1,148 @@
+{% extends "_base.html" %}
+{% block title %}{{ o.tenant_id }} — PRAYAS{% endblock %}
+{# Auto-refresh so `demo.sh` can run in one window and be watched in another. #}
+{% block head %}<meta http-equiv="refresh" content="10">{% endblock %}
+
+{% block nav %}
+  <span class="chip">{{ o.tenant_id }}</span>
+  <span class="chip">{{ who.role }}</span>
+  <span style="flex:1"></span>
+  <span class="chip">refreshed {{ o.generated_at.strftime('%H:%M:%S') }} UTC</span>
+  <form class="inline" method="post" action="/console/logout"><button>Sign out</button></form>
+{% endblock %}
+
+{% block body %}
+
+{# ── the six numbers that answer "is it working?" ───────────────────────── #}
+<h2>Now</h2>
+<div class="panel scroll">
+  <table>
+    <tr>
+      <th>Mandates</th><th>Cycles in flight</th><th>Events</th>
+      <th>Queued actions</th><th>Decisions</th><th>Recovered</th><th>Pipeline</th>
+    </tr>
+    <tr>
+      <td>{{ o.totals.mandates }}</td>
+      <td>{{ o.totals.in_flight }} <span class="chip">of {{ o.totals.cycles }}</span></td>
+      <td>{{ o.totals.events }}
+        {% if o.totals.unprocessed %}<span class="warn">· {{ o.totals.unprocessed }} unprocessed</span>{% endif %}</td>
+      <td>{{ o.totals.queued }}</td>
+      <td>{{ o.totals.decisions }}
+        <span class="chip"><span class="ok">{{ o.totals.allowed }} allowed</span>
+        {% if o.totals.refused %}· <span class="no">{{ o.totals.refused }} refused</span>{% endif %}</span></td>
+      <td>{{ rupees(o.totals.recovered_paise) }}</td>
+      <td>{% if o.totals.pipeline_healthy %}<span class="ok">drained</span>
+          {% else %}<span class="warn">backlog</span>{% endif %}</td>
+    </tr>
+  </table>
+</div>
+
+{# ── §44's ramp, and what it permits right now ──────────────────────────── #}
+<h2>Adoption stage</h2>
+<div class="panel" style="padding:.9rem">
+  <p style="margin:0 0 .5rem">
+    {% for s in stages %}<span class="chip"
+      style="{% if s == o.stage %}background:var(--accent);color:#fff;font-weight:600{% endif %}"
+      >{{ s }}</span>{% if not loop.last %} → {% endif %}{% endfor %}
+  </p>
+  <p style="margin:0" class="wrap">
+    {{ o.stage_description }}
+    {% if o.fires %}Fires up to <strong>{{ '%.0f'|format(o.mandate_share * 100) }}%</strong>
+      of mandates{% if o.holdout_pct %}, holding
+      <strong>{{ '%.0f'|format(o.holdout_pct * 100) }}%</strong> of those back as a
+      permanent control arm{% endif %}.
+    {% else %}<span class="warn">Nothing fires at this stage.</span>{% endif %}
+  </p>
+</div>
+
+{# ── what is about to happen, which is the thing an operator wants ──────── #}
+<h2>Queue — what fires next</h2>
+<div class="panel scroll">
+  {% if o.queue %}
+  <table>
+    <tr><th>Fires at (UTC)</th><th>Action</th><th>Cycle</th><th>State</th></tr>
+    {% for a in o.queue %}
+    <tr>
+      <td>{{ a.fire_at.strftime('%d %b %H:%M') }}</td>
+      <td>{% if a.action_type == 'pdn_notice' %}pre-debit notice{% else %}debit attempt{% endif %}</td>
+      <td><code>{{ a.cycle_id or '—' }}</code></td>
+      <td class="{{ 'ok' if a.state in ('pending','done') else 'warn' }}">{{ a.state }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="empty">Nothing queued.</p>{% endif %}
+</div>
+
+{# ── the money ──────────────────────────────────────────────────────────── #}
+<h2>Cycles</h2>
+<div class="panel scroll">
+  {% if o.cycles %}
+  <table>
+    <tr><th>Cycle</th><th>Amount</th><th>State</th><th>Attempts</th>
+        <th>Notice sent</th><th>Deadline</th><th>Recovered</th></tr>
+    {% for c in o.cycles %}
+    <tr>
+      <td><code>{{ c.cycle_id }}</code></td>
+      <td>{{ rupees(c.amount_paise) }}</td>
+      <td class="{{ 'ok' if c.state == 'succeeded' else '' }}">{{ c.state }}</td>
+      <td>{{ c.attempts_used }} / {{ c.attempt_budget }}</td>
+      {# The 24h notice is what makes the next debit lawful, so it belongs
+         beside the attempt count rather than buried in a detail view. #}
+      <td>{% if c.pdn_sent_at %}<span class="ok">{{ c.pdn_sent_at.strftime('%d %b %H:%M') }}</span>
+          {% else %}<span class="warn">not sent</span>{% endif %}</td>
+      <td>{{ c.deadline_at.strftime('%d %b') if c.deadline_at else '—' }}</td>
+      <td>{{ rupees(c.recovered_paise) if c.recovered_paise else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="empty">No cycles yet.</p>{% endif %}
+</div>
+
+{# ── ADR-095: why a healthy mandate may be sitting untouched ────────────── #}
+<h2>Mandates</h2>
+<div class="panel scroll">
+  {% if o.mandates %}
+  <table>
+    <tr><th>Mandate</th><th>Rail</th><th>State</th><th>Arm</th><th>Cap</th></tr>
+    {% for m in o.mandates %}
+    <tr>
+      <td><code>{{ m.mandate_id }}</code></td>
+      <td>{{ m.rail }}</td>
+      <td class="{{ 'ok' if m.state == 'active' else '' }}">{{ m.state }}</td>
+      <td>{% if m.arm == 'treatment' %}treatment
+          {% elif m.arm == 'holdout' %}<span class="chip">holdout — control arm</span>
+          {% else %}<span class="chip">outside the rollout</span>{% endif %}</td>
+      <td>{{ rupees(m.max_amount_paise) }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="empty">No mandates.</p>{% endif %}
+</div>
+
+{# ── the audit trail. A denial is rendered as prominently as an allowance. ─ #}
+<h2>Ledger — every decision, append-only</h2>
+<div class="panel scroll">
+  {% if o.ledger %}
+  <table>
+    <tr><th>#</th><th>When (UTC)</th><th>Action</th><th>Verdict</th>
+        <th>Why</th><th></th></tr>
+    {% for d in o.ledger %}
+    <tr>
+      <td>{{ d.chain_seq }}</td>
+      <td>{{ d.ts.strftime('%d %b %H:%M:%S') }}</td>
+      <td>{% if d.action_type == 'pdn_notice' %}pre-debit notice{% else %}debit attempt{% endif %}</td>
+      <td class="{{ 'allow' if d.verdict == 'ALLOW' else 'deny' }}">{{ d.verdict }}</td>
+      <td class="wrap">{{ d.rationale or '—' }}</td>
+      <td><a href="/console/replay/{{ d.decision_id }}/view">rules &rarr;</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="empty">Nothing decided yet.</p>{% endif %}
+</div>
+
+<p class="chip" style="margin-top:1.4rem">
+  Read-only. Every action this system takes goes through the scheduled-action
+  path so it is re-checked against the rules at the moment it fires and written
+  to the ledger — a control here would bypass both.
+</p>
+{% endblock %}

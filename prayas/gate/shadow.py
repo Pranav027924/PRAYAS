@@ -24,12 +24,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Final
 
+from prayas_rulepack.baseline import BASELINE_HOUR_IST as _BASELINE_HOUR_IST
+from prayas_rulepack.baseline import BASELINE_RETRY_DAYS as _BASELINE_RETRY_DAYS
+from prayas_rulepack.baseline import baseline_attempts
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from prayas.gate.engine import ALLOW, evaluate
-from prayas.policy.baseline import BASELINE_HOUR_IST as _BASELINE_HOUR_IST
-from prayas.policy.baseline import BASELINE_RETRY_DAYS as _BASELINE_RETRY_DAYS
-from prayas.policy.baseline import baseline_attempts
 
 #: IST is UTC+5:30. Times are stored UTC and evaluated IST (project standard).
 IST_OFFSET: Final = timedelta(hours=5, minutes=30)

@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 import pytest
+from prayas_rulepack.baseline import baseline_attempts
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -18,7 +19,6 @@ from prayas.gate.shadow import (
     evaluate_baseline_policy,
     hour_ist,
 )
-from prayas.policy.baseline import baseline_attempts
 from tests.conftest import requires_db
 
 pytestmark = [pytest.mark.db, requires_db]

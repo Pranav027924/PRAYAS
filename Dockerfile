@@ -12,7 +12,12 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 
 # Dependency layer first so source edits do not invalidate the install cache.
+# The workspace member is copied with the manifests, not with the source: uv
+# resolves it at sync time, so a missing `packages/` fails the dependency layer
+# rather than producing an image that builds and then cannot import the gate's
+# evaluator (ADR-091).
 COPY pyproject.toml uv.lock* ./
+COPY packages/ ./packages/
 RUN uv sync --frozen --no-install-project --no-dev 2>/dev/null \
     || uv sync --no-install-project --no-dev
 

@@ -1,6 +1,7 @@
 """Load the compliance rule pack from YAML (ADR-020).
 
-`prayas/gate/rules/rulepack.yaml` is the reviewable source of truth; this
+`packages/prayas-rulepack/src/prayas_rulepack/rulepack.yaml` is the reviewable
+source of truth (ADR-091); this
 migration is the mechanism that makes "a regulatory change is a data migration"
 literally true rather than a slogan.
 
@@ -35,7 +36,14 @@ down_revision: str | None = "0006_regulatory_reference"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-RULEPACK = Path(__file__).resolve().parents[2] / "prayas" / "gate" / "rules" / "rulepack.yaml"
+RULEPACK = (
+    Path(__file__).resolve().parents[2]
+    / "packages"
+    / "prayas-rulepack"
+    / "src"
+    / "prayas_rulepack"
+    / "rulepack.yaml"
+)
 
 
 def _load() -> dict[str, Any]:

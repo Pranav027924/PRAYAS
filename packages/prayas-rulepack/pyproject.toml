@@ -1,0 +1,30 @@
+[project]
+name = "prayas-rulepack"
+version = "0.1.0"
+description = "Indian recurring-payments compliance rules, with citations, as versioned data"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+
+# One dependency, deliberately. A compliance artifact that dragged in a web
+# framework would be harder to audit than the rules it carries, and anyone
+# checking whether these rules are correct should be able to read the whole
+# tree in an afternoon.
+dependencies = ["pyyaml>=6.0"]
+
+[project.scripts]
+prayas-audit = "prayas_rulepack.audit:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/prayas_rulepack"]
+
+[tool.hatch.build.targets.wheel.force-include]
+# The rules themselves, and PEP 561's marker. Without `py.typed` a consumer
+# type-checking against this package is told it is untyped — the annotations
+# are all there and none of them are visible.
+"src/prayas_rulepack/rulepack.yaml" = "prayas_rulepack/rulepack.yaml"
+"src/prayas_rulepack/py.typed" = "prayas_rulepack/py.typed"

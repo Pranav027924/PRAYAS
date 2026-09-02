@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from prayas_rulepack.predicate import PredicateError
 
 from prayas.gate.engine import (
     ALLOW,
@@ -25,7 +26,6 @@ from prayas.gate.engine import (
     evaluate_rules,
     make_afa_free_cap,
 )
-from prayas.gate.predicate import PredicateError
 
 TODAY = date(2026, 8, 25)
 

@@ -1,0 +1,28 @@
+{% extends "_base.html" %}
+{% block title %}Sign in — PRAYAS{% endblock %}
+{% block body %}
+<h2>Sign in</h2>
+<div class="panel" style="padding:1.1rem">
+  <p style="margin-top:0">
+    Paste a console token. There is no username and password: this system has no
+    user store, and adding one here would put a second, weaker path to the same
+    data beside the signed one.
+  </p>
+  {% if request.query_params.get('error') %}
+    <p class="deny">That token did not verify. It may be expired, or signed with
+    a different secret.</p>
+  {% endif %}
+  <form method="post" action="/console/login">
+    <textarea name="token" rows="4" required autofocus
+      style="width:100%;font:12px ui-monospace,monospace;padding:.6rem;
+             border:1px solid var(--line);border-radius:8px;
+             background:var(--bg);color:var(--ink)"
+      placeholder="eyJleHAiOi..."></textarea>
+    <p><button type="submit">Open console</button></p>
+  </form>
+  <p class="chip">
+    <code>./scripts/demo.sh</code> prints a token. Or mint one:
+    <code>issue(tenant, "merchant_ops")</code> from <code>prayas.console.auth</code>.
+  </p>
+</div>
+{% endblock %}

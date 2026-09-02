@@ -13,8 +13,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
-from prayas.gate.predicate import PredicateError, safe_eval, validate
+from prayas_rulepack.predicate import PredicateError, safe_eval, validate
 
 # ── the four the exit criterion names ───────────────────────────────────────
 

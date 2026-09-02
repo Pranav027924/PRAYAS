@@ -47,6 +47,7 @@ from prayas.executor.claiming import (
     claim_due_actions,
 )
 from prayas.executor.firing import fire_action
+from prayas.executor.notice import fire_notice, is_notice
 from prayas.executor.outbox import relay_once
 from prayas.executor.provider import RailProvider
 from prayas.observability import metrics
@@ -88,6 +89,14 @@ async def drain_tenant(
         # One transaction per action: a refusal for one must not unwind
         # another's committed decision record.
         async with tenant_transaction(engine, tenant_id) as conn:
+            if is_notice(action):
+                # A notice never reaches the rail and never spends attempt
+                # budget (ADR-099). Routing it through `fire_action` would do
+                # both, charging §1's retry allowance for a message.
+                notice = await fire_notice(conn, action, now=now)
+                fired += 1 if notice.sent else 0
+                refused += 0 if notice.sent else 1
+                continue
             outcome = await fire_action(conn, action, now=now)
         if outcome.fired:
             fired += 1

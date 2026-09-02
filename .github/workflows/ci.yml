@@ -74,8 +74,11 @@ jobs:
       # pip-audit treats as an error under --strict.
       - name: Dependency vulnerability scan # ADR-009
         run: |
-          uv export --no-emit-project --format requirements-txt > /tmp/requirements.txt
+          uv export --no-emit-project --no-emit-workspace --format requirements-txt > /tmp/requirements.txt
           uv run pip-audit --strict -r /tmp/requirements.txt
+
+      - name: Rule pack conformance  # ADR-091
+        run: uv run pytest packages/prayas-rulepack/tests -q
 
       - name: Static analysis (SAST)  # ADR-086
         run: uv run bandit -c pyproject.toml -r prayas -q

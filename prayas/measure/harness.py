@@ -31,13 +31,13 @@ from typing import Final
 
 import numpy as np
 from numpy.typing import NDArray
+from prayas_rulepack.baseline import BASELINE_RETRY_DAYS
 
 from prayas.domain.rails import IST, UpiAutopayAdapter, adapter_for
 from prayas.inference.cause import infer, is_terminal
 from prayas.inference.hazard import leaky_survival
 from prayas.inference.nowcast import IssuerNowcast
 from prayas.measure.assignment import CONTROL, TREATMENT, arm, propensity
-from prayas.policy.baseline import BASELINE_RETRY_DAYS
 from prayas.retention.revocation import RevocationFeatures, RevocationModel
 from prayas.sequencer.dp import solve
 from prayas.sequencer.economics import (

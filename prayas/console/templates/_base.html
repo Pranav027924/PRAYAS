@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}PRAYAS{% endblock %}</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --panel: #fff; --ink: #16161a; --muted: #6b6b76;
+    --line: #e6e6e3; --ok: #0a7a3f; --no: #b3261e; --warn: #9a6700;
+    --accent: #1c4ed8; --chip: #f1f1ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17171a; --panel: #1e1e22; --ink: #ececf0; --muted: #a0a0aa;
+      --line: #2e2e34; --ok: #4ade80; --no: #f87171; --warn: #fbbf24;
+      --accent: #7aa2ff; --chip: #26262c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  header { border-bottom: 1px solid var(--line); background: var(--panel); }
+  .bar { max-width: 78rem; margin: 0 auto; padding: .85rem 1.25rem;
+         display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  .brand { font-weight: 650; letter-spacing: .02em; }
+  .brand small { color: var(--muted); font-weight: 400; margin-left: .5rem; }
+  main { max-width: 78rem; margin: 0 auto; padding: 1.25rem; }
+  h2 { font-size: .82rem; text-transform: uppercase; letter-spacing: .07em;
+       color: var(--muted); margin: 1.9rem 0 .6rem; font-weight: 600; }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+           border-radius: 10px; overflow: hidden; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: .5rem .8rem; border-bottom: 1px solid var(--line);
+           white-space: nowrap; }
+  th { font-size: .74rem; text-transform: uppercase; letter-spacing: .05em;
+       color: var(--muted); font-weight: 600; background: var(--chip); }
+  tr:last-child td { border-bottom: 0; }
+  td.wrap { white-space: normal; color: var(--muted); }
+  code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  a { color: var(--accent); }
+  .allow, .ok { color: var(--ok); font-weight: 600; }
+  .deny, .no { color: var(--no); font-weight: 600; }
+  .warn { color: var(--warn); font-weight: 600; }
+  .chip { display: inline-block; padding: .1rem .5rem; border-radius: 999px;
+          background: var(--chip); color: var(--muted); font-size: .75rem; }
+  .empty { padding: 1.1rem .8rem; color: var(--muted); }
+  .scroll { overflow-x: auto; }
+  form.inline { margin: 0; }
+  button { font: inherit; padding: .35rem .7rem; border-radius: 7px;
+           border: 1px solid var(--line); background: var(--chip);
+           color: var(--ink); cursor: pointer; }
+</style>
+{% block head %}{% endblock %}
+<header>
+  <div class="bar">
+    <span class="brand">PRAYAS <small>recovery engine</small></span>
+    {% block nav %}{% endblock %}
+  </div>
+</header>
+<main>{% block body %}{% endblock %}</main>

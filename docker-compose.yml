@@ -38,6 +38,8 @@ services:
   # Runs as the APP role: owns nothing, subject to RLS unconditionally (ADR-004).
   api:
     build: .
+    env_file:
+      - .env
     environment:
       PRAYAS_ENV: ${PRAYAS_ENV:-local}
       PRAYAS_LOG_LEVEL: ${PRAYAS_LOG_LEVEL:-INFO}
@@ -75,12 +77,51 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  # §17.2's middle step. Without this nothing drains `events_raw` and no
+  # projected state ever exists, so the executor polls an empty queue forever
+  # (FINDING-P17-04). Its own service for the same reason the executor is:
+  # projection is a read-heavy fold over history and must not compete with the
+  # fire path. Safe to replicate — `project_tenant` claims with SKIP LOCKED.
+  projector:
+    build: .
+    command: ["python", "-m", "prayas.ingest.worker"]
+    env_file:
+      - .env
+    environment:
+      PRAYAS_ENV: ${PRAYAS_ENV:-local}
+      PRAYAS_LOG_LEVEL: ${PRAYAS_LOG_LEVEL:-INFO}
+      PRAYAS_DATABASE_URL_APP: postgresql+asyncpg://${POSTGRES_APP_USER:-prayas_app}:${POSTGRES_APP_PASSWORD:-prayas_local_dev_only}@postgres:5432/${POSTGRES_DB:-prayas}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # §17.2's `decision-svc`. Reads projected state, solves §23.2, and writes
+  # `scheduled_actions` — the queue the executor drains. Separate from the
+  # projector so a slow solve cannot stall ingestion, and from the executor
+  # because scheduling is not firing (§32 re-validates at fire time regardless).
+  planner:
+    build: .
+    command: ["python", "-m", "prayas.planner.worker"]
+    env_file:
+      - .env
+    environment:
+      PRAYAS_ENV: ${PRAYAS_ENV:-local}
+      PRAYAS_LOG_LEVEL: ${PRAYAS_LOG_LEVEL:-INFO}
+      PRAYAS_DATABASE_URL_APP: postgresql+asyncpg://${POSTGRES_APP_USER:-prayas_app}:${POSTGRES_APP_PASSWORD:-prayas_local_dev_only}@postgres:5432/${POSTGRES_DB:-prayas}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
   # The executor is its own service (ADR-042): it scales on pending-timer depth
   # per §15, and it must be killable independently of the API — two Phase 6
   # exit criteria turn on surviving a real process death.
   executor:
     build: .
     command: ["python", "-m", "prayas.executor.worker"]
+    env_file:
+      - .env
     environment:
       PRAYAS_ENV: ${PRAYAS_ENV:-local}
       PRAYAS_LOG_LEVEL: ${PRAYAS_LOG_LEVEL:-INFO}
