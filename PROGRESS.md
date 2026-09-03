@@ -1640,6 +1640,17 @@ Hand-rolled inline SVG, geometry computed server-side. Three visualisations in t
 
 **Fix.** Events are scoped to the cycle by the payload's `invoice_id`, which is the same key the projector groups cycles on.
 
+### ADR-107 · 2026-09-03 · The ledger screen, and a badge that had to be earned
+**Decision:** `templates/ledger.html` at `/console/ledger`, with the replay drawer as a section of the same page (Demo spec §R4.3, §R4.4).
+
+**The chain badge was hardcoded `true`.** It is the one claim on this screen a reviewer cannot check for themselves, which makes it the one that most has to be earned — a green "chain verified" that is a string literal is worth less than no badge at all. `/v1/ledger` now walks the chain with `verify_chain` on every request: 15 ms over 2,600 rows, so there is no argument for caching it, and N's "add an index, do not cache" does not even arise. A break renders the positions and reasons rather than a summary. `test_the_chain_badge_reports_a_real_walk` tampers with a stored record and asserts the badge turns.
+
+**A refusal is rendered with the same markup as an allowance** (N5) — same row, same chip element, only the colour token differs — so a later change cannot quietly demote refusals into a footnote. A ledger that only shows success proves nothing, and the denials are the strongest rows in the table.
+
+**The drawer is a section of the page, not a JavaScript overlay.** A linked decision then survives the back button, is addressable, and needs no build step (N3). It carries §32's two load-bearing lines: the fire-time evaluation instant, said as *"fire time, not schedule time"*, and every rule with its version, regulator, citation and `as_of` — plus the chain position with both hashes and whether the record still recomputes to its stored hash.
+
+Hashes are shown head-and-tail: the middle carries nothing a reader can use, and 64 characters pushes the columns that matter off the screen.
+
 ## Spec errata found (documentation only, no code impact)
 
 - **§4 (line 193) cites "§21.4" for reply parsing residency.** §21 is the liquidity hazard model and has no subsections; the content is in **§41.3**. Found in Phase 13.

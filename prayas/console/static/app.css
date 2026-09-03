@@ -200,3 +200,20 @@ td.right, th.right { text-align: right; }
 .tl .mk.debit_attempt circle { fill: var(--ok); }
 .tl .mk.deny circle { fill: var(--deny); }
 .tl .mk.payment_failed circle { fill: var(--deny); }
+
+/* ── ledger and drawer (§R4.3, §R4.4) ───────────────────────────────────── */
+
+.filters { float: right; font-weight: 400; }
+.filter {
+  display: inline-block; padding: 2px 10px; margin-left: 6px; border-radius: 999px;
+  font-size: 12.5px; text-decoration: none; color: var(--ink-2); background: var(--chip, #F1F1EE);
+  border: 1px solid var(--line);
+}
+.filter.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+tr.row-open td { background: var(--accent-sub); }
+.drawer { border-color: var(--accent); }
+.drawer h3 { font-size: 13px; margin: 18px 0 6px; color: var(--ink-2); }
+.kv td:first-child { color: var(--ink-2); width: 160px; }
+code.deny { color: var(--deny); }
+td.warn { color: var(--warn); }

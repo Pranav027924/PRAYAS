@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Ledger — PRAYAS{% endblock %}
+{% block heading %}Decisions{% endblock %}
+{% block subheading %}
+  {{ tenant_name }} · append-only, hash-chained ·
+  {% if chain.verified %}
+    <span class="chip ok">chain verified · {{ '{:,}'.format(chain.rows) }} rows</span>
+  {% else %}
+    <span class="chip deny">chain BROKEN · {{ chain.breaks|length }} break(s)</span>
+  {% endif %}
+{% endblock %}
+
+{% block body %}
+
+{% if not chain.verified %}
+{# A break is the loudest thing this system can say. §43: page immediately. #}
+<section class="card">
+  <h2>Chain integrity</h2>
+  <table>
+    <tr><th>Position</th><th>Reason</th></tr>
+    {% for b in chain.breaks %}
+    <tr><td>#{{ b.chain_seq }}</td><td class="deny">{{ b.reason }}</td></tr>
+    {% endfor %}
+  </table>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>
+    Decisions
+    <span class="filters">
+      {% for key, label in (('', 'All'), ('allow', 'Allowed'), ('refused', 'Refused')) %}
+      <a class="filter {{ 'on' if verdict == key }}"
+         href="/console/ledger{{ '?verdict=' ~ key if key }}">{{ label }}</a>
+      {% endfor %}
+    </span>
+  </h2>
+  <table>
+    <tr><th>#</th><th>When (IST)</th><th>Action</th><th>Subject</th>
+        <th>Verdict</th><th>Rules</th><th></th></tr>
+    {% for d in decisions %}
+    {# N5: a refusal is rendered with the same weight as an allowance. A
+       ledger that only shows success proves nothing, and the denials are the
+       strongest rows in the table. #}
+    <tr class="{{ 'row-open' if d.decision_id == open_id }}">
+      <td class="num">{{ d.id }}</td>
+      <td>{{ ist(d.at) }}</td>
+      <td>{{ action_label(d.action) }}</td>
+      <td><code>{{ d.subject or '—' }}</code></td>
+      <td><span class="chip {{ 'ok' if d.verdict == 'ALLOW' else 'deny' }}">{{ d.verdict }}</span></td>
+      <td>{% if d.summary %}<code class="deny">{{ d.summary }}</code>
+          {% else %}{{ d.rule_count }} rules{% endif %}</td>
+      <td class="right"><a href="/console/ledger?verdict={{ verdict }}&decision={{ d.decision_id }}">open &rarr;</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="empty">No decisions match this filter.</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+{% if replay %}
+{# ── the drawer. The compliance reviewer's entire evaluation. ──────────── #}
+<section class="card drawer">
+  <h2>Decision {{ replay.decision_id }}</h2>
+  <div class="body">
+    <table class="kv">
+      <tr><td>Verdict</td>
+          <td><span class="chip {{ 'ok' if replay.verdict == 'ALLOW' else 'deny' }}">{{ replay.verdict }}</span></td></tr>
+      <tr><td>Action</td>
+          <td>{{ action_label(replay.action_type) }}{% if replay.chosen and replay.chosen.idem_key %}
+              · <code>{{ replay.chosen.idem_key }}</code>{% endif %}</td></tr>
+      {# One of the two lines read aloud in the demo. §32: rules and state both
+         move between deciding and doing, so *when* it was evaluated is the
+         claim, not a timestamp. #}
+      <tr><td>Evaluated at</td>
+          <td><b>{{ ist(replay.ts, "%d %b %Y, %H:%M:%S") }} IST</b>
+              <span class="foot">— fire time, not schedule time</span></td></tr>
+      <tr><td>Tenant</td><td>{{ replay.tenant_id }}</td></tr>
+      {% if replay.degraded %}
+      <tr><td>Degraded</td>
+          <td class="warn">decided while degraded — rules could not be fully established</td></tr>
+      {% endif %}
+    </table>
+
+    <h3>Rules consulted</h3>
+    <table>
+      <tr><th></th><th>Rule</th><th>Version</th><th>Regulator</th><th>Citation</th><th>As of</th></tr>
+      {% for c in replay.compliance_checks %}
+      <tr>
+        <td>{% if c.verdict == 'ALLOW' %}<span class="chip ok">✓</span>
+            {% else %}<span class="chip deny">✗</span>{% endif %}</td>
+        <td><code>{{ c.rule_id }}</code></td>
+        <td class="num">v{{ c.version }}</td>
+        <td>{{ c.regulator }}</td>
+        <td>{{ c.citation }}</td>
+        <td class="num">{{ c.as_of }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+
+    <h3>Chain position</h3>
+    <table class="kv">
+      <tr><td>Position</td><td class="num">#{{ replay.chain_seq }}</td></tr>
+      <tr><td>Previous hash</td><td><code>{{ short(replay.integrity.prev_hash) }}</code></td></tr>
+      <tr><td>This record</td><td><code>{{ short(replay.integrity.record_hash) }}</code></td></tr>
+      <tr><td>Recomputed</td>
+          <td>{% if replay.integrity.hash_matches %}<span class="chip ok">matches</span>
+              {% else %}<span class="chip deny">DOES NOT MATCH</span>{% endif %}</td></tr>
+    </table>
+
+    {% if not replay.shows_rejected_candidates %}
+    <p class="foot">
+      No rejected candidates recorded for this decision — a decision without
+      the options it turned down cannot be fully reviewed (§32).
+    </p>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}

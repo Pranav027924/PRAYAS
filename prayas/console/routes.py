@@ -27,6 +27,7 @@ from prayas.console import metrics
 from prayas.console.api import _engine, principal, templates
 from prayas.console.auth import BATCH_RESULT, DECISION_REPLAY, Principal, authorise
 from prayas.db.tenancy import tenant_transaction
+from prayas.ledger.chain import verify_chain
 from prayas.measure.replay import ReplayError
 
 router = APIRouter(prefix="/v1", tags=["demo"])
@@ -498,6 +499,12 @@ async def ledger(
                 {"t": who.tenant_id},
             )
         ).one()
+        # Actually walked, not asserted. A "chain verified" badge that is
+        # hardcoded true is worth less than no badge: it is the one claim on
+        # this screen a reviewer cannot check for themselves, so it has to be
+        # the one most obviously earned. 15 ms over 2,600 rows — cheap enough
+        # that there is no argument for caching it.
+        breaks = await verify_chain(conn, who.tenant_id)
 
     decisions = []
     for row in rows:
@@ -518,8 +525,9 @@ async def ledger(
 
     return {
         "chain": {
-            "verified": True,
+            "verified": not breaks,
             "rows": int(chain.rows),
+            "breaks": [{"chain_seq": b.chain_seq, "reason": b.reason} for b in breaks[:5]],
             "last_checked": datetime.now(UTC).isoformat(),
         },
         "decisions": decisions,
@@ -700,5 +708,72 @@ async def cycle_screen(
             "ist": ist,
             "hours": hours,
             "rail_label": _rail_label,
+        },
+    )
+
+
+def _action_label(action: str) -> str:
+    return {
+        "debit_attempt": "Debit attempt",
+        "pdn_notice": "Pre-debit notice",
+        "date_change": "Date change proposed",
+    }.get(action, action.replace("_", " ").capitalize())
+
+
+def _short_hash(value: str | None) -> str:
+    """Head and tail of a hash. The middle carries nothing a reader can use."""
+    if not value or len(value) < 16:
+        return value or "—"
+    return f"{value[:8]}…{value[-4:]}"
+
+
+@pages.get("/ledger", response_class=HTMLResponse)
+async def ledger_screen(
+    request: Request,
+    who: Annotated[Principal, Depends(principal)],
+    verdict: Annotated[str, Query()] = "",
+    decision: Annotated[str | None, Query()] = None,
+) -> HTMLResponse:
+    """**Screen 3 — the trust screen.** The compliance reviewer's evaluation.
+
+    The drawer is a section of this page rather than a JavaScript overlay: a
+    linked decision then survives the back button, is addressable, and needs no
+    build step (N3). `?decision=` opens it.
+    """
+    from prayas.console.format import ist
+
+    page = await ledger(request, who, verdict=verdict or None, limit=50, cursor=None)
+    replay = None
+    if decision:
+        try:
+            replay = await decision_replay(request, decision, who)
+        except HTTPException:
+            replay = None
+
+    health = await _health(request, [who.tenant_id])
+    async with tenant_transaction(_engine(request), who.tenant_id) as conn:
+        row = (
+            await conn.execute(
+                text("SELECT name FROM tenants WHERE tenant_id = :t"), {"t": who.tenant_id}
+            )
+        ).first()
+
+    return templates.TemplateResponse(
+        request=request,
+        name="ledger.html",
+        context={
+            "screen": "ledger",
+            "tenant": who.tenant_id,
+            "tenant_name": str(row.name) if row is not None else who.tenant_id,
+            "tenants": [],
+            "health": health,
+            "chain": page["chain"],
+            "decisions": page["decisions"],
+            "verdict": verdict,
+            "replay": replay,
+            "open_id": decision,
+            "ist": ist,
+            "action_label": _action_label,
+            "short": _short_hash,
         },
     )
