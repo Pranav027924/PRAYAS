@@ -46,3 +46,95 @@
 
   setInterval(poll, 3000);
 })();
+
+/* Time travel (Demo spec Phase 6, N2's one write). Present only on the cycle
+ * screen, and only for a tenant seeded `demo_tenant: true` — the button
+ * itself is decoration; `POST /v1/demo/clock/advance` re-checks the flag
+ * server-side regardless of what this file does.
+ *
+ * One orchestrated motion per click: the playhead eases to the new "now"
+ * (a plain CSS transition, no per-frame JS), then one reload — not a poll
+ * loop — shows whatever fired while it moved.
+ */
+(function () {
+  "use strict";
+
+  var panel = document.getElementById("clock-controls");
+  if (!panel) return;
+
+  var cycleId = panel.getAttribute("data-cycle-id");
+  var status = document.getElementById("clock-status");
+  var playhead = document.querySelector(".playhead");
+  var buttons = panel.querySelectorAll("button");
+
+  function setStatus(text) {
+    if (status) status.textContent = text;
+  }
+
+  function setBusy(busy) {
+    for (var i = 0; i < buttons.length; i++) buttons[i].disabled = busy;
+  }
+
+  function movePlayhead(percent) {
+    if (playhead && percent !== null) {
+      playhead.style.left = Math.max(0, Math.min(100, percent)) + "%";
+    }
+  }
+
+  function sweepThenReload() {
+    fetch("/v1/cycles/" + encodeURIComponent(cycleId) + "/timeline", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (payload) {
+        if (payload && payload.axis) {
+          var from = new Date(payload.axis.from).getTime();
+          var to = new Date(payload.axis.to).getTime();
+          var now = new Date(payload.now).getTime();
+          if (to > from) movePlayhead(((now - from) / (to - from)) * 100);
+        }
+      })
+      .catch(function () { /* the reload below still shows the new state */ })
+      .then(function () { setTimeout(function () { location.reload(); }, 950); });
+  }
+
+  function post(body) {
+    setBusy(true);
+    setStatus("advancing…");
+    fetch("/v1/demo/clock/advance", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (data) {
+          return { ok: r.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        if (!result.ok) {
+          setStatus((result.data && result.data.detail) || "advance refused");
+          setBusy(false);
+          return;
+        }
+        setStatus("");
+        sweepThenReload();
+      })
+      .catch(function () {
+        setStatus("advance failed");
+        setBusy(false);
+      });
+  }
+
+  for (var i = 0; i < buttons.length; i++) {
+    buttons[i].addEventListener("click", function (evt) {
+      var el = evt.currentTarget;
+      if (el.hasAttribute("data-seconds")) {
+        post({ seconds: parseInt(el.getAttribute("data-seconds"), 10) });
+      } else if (el.hasAttribute("data-jump")) {
+        post({ jump_to_next_action: true, cycle_id: cycleId });
+      } else if (el.hasAttribute("data-reset")) {
+        post({ reset: true });
+      }
+    });
+  }
+})();

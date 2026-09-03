@@ -122,3 +122,48 @@ def test_the_bar_never_shows_more_used_than_exists() -> None:
     assert budget_pips(9, 4) == ["used"] * 4
     assert budget_pips(-1, 4) == ["left"] * 4
     assert budget_pips(1, 0) == []
+
+
+# ── Demo spec Phase 6: the playhead, and a scheduled-but-unfired action ─────
+
+
+def test_now_is_placed_on_the_axis_when_inside_the_frame() -> None:
+    start = datetime(2026, 9, 3, 0, 0, tzinfo=UTC)
+    g = build(_payload(now=(start + timedelta(hours=12)).isoformat()))
+    assert g.now_x is not None
+    assert 0 <= g.now_x <= WIDTH
+    # Roughly a quarter of the way across a 2-day frame.
+    assert g.now_x < g.markers[1].x
+
+
+def test_now_outside_the_frame_is_not_placed() -> None:
+    """Off-axis is dropped for events; the playhead gets the same honesty
+    rather than being clamped to an edge that would misstate where "now" is."""
+    start = datetime(2026, 9, 3, 0, 0, tzinfo=UTC)
+    g = build(_payload(now=(start - timedelta(days=1)).isoformat()))
+    assert g.now_x is None
+
+
+def test_no_now_in_the_payload_draws_no_playhead() -> None:
+    g = build(_payload())
+    assert g.now_x is None
+
+
+def test_a_pending_marker_is_flagged_and_a_fired_one_is_not() -> None:
+    start = datetime(2026, 9, 3, 0, 0, tzinfo=UTC)
+    payload = _payload()
+    events = list(payload["events"]) if isinstance(payload["events"], list) else []
+    events.append(
+        {
+            "at": (start + timedelta(hours=40)).isoformat(),
+            "kind": "debit_attempt",
+            "label": "debit (scheduled)",
+            "decision_id": None,
+            "pending": True,
+        }
+    )
+    payload["events"] = events
+
+    g = build(payload)
+    assert any(m.pending for m in g.markers)
+    assert not all(m.pending for m in g.markers)

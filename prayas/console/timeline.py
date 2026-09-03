@@ -45,6 +45,9 @@ class Marker:
     verdict: str | None
     #: Markers are staggered so two events an hour apart do not overprint.
     row: int
+    #: A scheduled action that has not fired yet (Demo spec Phase 6) — drawn
+    #: ghosted rather than lit, distinguishing "will happen" from "happened".
+    pending: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +63,10 @@ class Geometry:
     ticks: list[Tick]
     notice_x: float | None
     debit_x: float | None
+    #: Where "now" sits on the axis (Demo spec Phase 6's playhead). `None`
+    #: when the payload carries no `now` — an older caller, or a frame with no
+    #: valid axis at all.
+    now_x: float | None = None
     width: int = WIDTH
     height: int = HEIGHT
     axis_y: int = AXIS_Y
@@ -84,7 +91,7 @@ def build(payload: dict[str, Any]) -> Geometry:
     start = _parse(axis.get("from"))
     end = _parse(axis.get("to"))
     if start is None or end is None or end <= start:
-        return Geometry(bands=[], markers=[], ticks=[], notice_x=None, debit_x=None)
+        return Geometry(bands=[], markers=[], ticks=[], notice_x=None, debit_x=None, now_x=None)
 
     span = (end - start).total_seconds()
     inner = WIDTH - PAD_L - PAD_R
@@ -134,6 +141,7 @@ def build(payload: dict[str, Any]) -> Geometry:
                 decision_id=event.get("decision_id"),
                 verdict=event.get("verdict"),
                 row=row,
+                pending=bool(event.get("pending", False)),
             )
         )
 
@@ -145,7 +153,12 @@ def build(payload: dict[str, Any]) -> Geometry:
             ticks.append(Tick(x=x_of(cursor), label=cursor.strftime("%d %b %H:%M")))
         cursor += step
 
-    return Geometry(bands=bands, markers=markers, ticks=ticks, notice_x=notice_x, debit_x=debit_x)
+    now = _parse(payload.get("now"))
+    now_x = x_of(now) if now is not None and start <= now <= end else None
+
+    return Geometry(
+        bands=bands, markers=markers, ticks=ticks, notice_x=notice_x, debit_x=debit_x, now_x=now_x
+    )
 
 
 def budget_pips(used: int, total: int) -> list[str]:

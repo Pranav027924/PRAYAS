@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from prayas.config import Settings
 from prayas.db.engine import create_app_engine
 from prayas.db.tenancy import tenant_transaction
+from prayas.demo.clock import current_now
 from prayas.executor.claiming import (
     CLAIM_BATCH,
     LEASE_SECONDS,
@@ -75,14 +76,25 @@ async def drain_tenant(
 ) -> TickResult:
     """Claim and fire one tenant's due actions, then relay their intents.
 
-    `now` is the instant fire-time revalidation and the gate evaluate against.
-    Production leaves it None and the wall clock is used; tests pin it, because
-    the gate's NPCI window check would otherwise make them pass or fail on the
-    hour they happened to run at. Claiming still uses the database clock — what
-    is *due* and what is *legal* are different questions.
+    `now` is the instant fire-time revalidation and the gate evaluate against,
+    and also what claiming treats as *due* (`claim_due_actions`'s own `now`;
+    what is due and what is legal remain different questions, now answered
+    from the same clock instead of two). Tests pin it, because the gate's NPCI
+    window check would otherwise make them pass or fail on the hour they
+    happened to run at.
+
+    Production leaves it `None`, and this tenant's own clock is read instead
+    of assuming the wall clock: every tenant gets `datetime.now(UTC)` except a
+    demo tenant mid-advance (Demo spec Phase 6), which gets that plus its
+    stored offset. `current_now` returns the wall clock outright for a tenant
+    with no offset, so this is not a behaviour change for anyone who never
+    calls `POST /v1/demo/clock/advance`.
     """
     async with tenant_transaction(engine, tenant_id) as conn:
-        actions = await claim_due_actions(conn, tenant_id, batch=batch, lease_seconds=lease_seconds)
+        effective_now = now if now is not None else await current_now(conn, tenant_id)
+        actions = await claim_due_actions(
+            conn, tenant_id, batch=batch, lease_seconds=lease_seconds, now=effective_now
+        )
 
     fired = refused = 0
     for action in actions:
@@ -93,11 +105,11 @@ async def drain_tenant(
                 # A notice never reaches the rail and never spends attempt
                 # budget (ADR-099). Routing it through `fire_action` would do
                 # both, charging §1's retry allowance for a message.
-                notice = await fire_notice(conn, action, now=now)
+                notice = await fire_notice(conn, action, now=effective_now)
                 fired += 1 if notice.sent else 0
                 refused += 0 if notice.sent else 1
                 continue
-            outcome = await fire_action(conn, action, now=now)
+            outcome = await fire_action(conn, action, now=effective_now)
         if outcome.fired:
             fired += 1
         else:

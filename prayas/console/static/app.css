@@ -201,6 +201,42 @@ td.right, th.right { text-align: right; }
 .tl .mk.deny circle { fill: var(--deny); }
 .tl .mk.payment_failed circle { fill: var(--deny); }
 
+/* A scheduled action that has not fired — ghosted rather than lit, so a
+   viewer never mistakes "will happen" for "happened" (Demo spec Phase 6). */
+.tl .mk.pending line { stroke-dasharray: 2 2; }
+.tl .mk.pending circle { fill: none; stroke: var(--ink-3); stroke-width: 1.5; }
+.tl .mk.pending text { fill: var(--ink-3); font-style: italic; }
+
+/* The playhead: where the tenant's own clock — real or virtually advanced —
+   currently sits. Transitioned on `left`, so one clock advance sweeps it
+   rather than snapping; the one orchestrated motion this screen allows. */
+.tl-wrap { position: relative; }
+.playhead {
+  position: absolute; top: 0; width: 2px; background: var(--accent);
+  opacity: .55; pointer-events: none;
+  transition: left 900ms ease-in-out;
+}
+.playhead .label {
+  position: absolute; top: -2px; left: 4px; font-size: 10.5px; color: var(--accent);
+  white-space: nowrap; font-weight: 600;
+}
+
+/* ── time travel (Demo spec Phase 6, N2's one write) ────────────────────── */
+
+.clock {
+  display: flex; align-items: center; gap: 8px; margin-top: 10px;
+  padding-top: 10px; border-top: 1px solid var(--line);
+}
+.clock-label { font-size: 12.5px; color: var(--ink-3); margin-right: 4px; }
+.clock button {
+  font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink-2);
+  cursor: pointer;
+}
+.clock button:hover { border-color: var(--accent); color: var(--accent); }
+.clock button:disabled { opacity: .5; cursor: default; }
+.clock-status { font-size: 12.5px; color: var(--ink-3); margin-left: 4px; }
+
 /* ── ledger and drawer (§R4.3, §R4.4) ───────────────────────────────────── */
 
 .filters { float: right; font-weight: 400; }

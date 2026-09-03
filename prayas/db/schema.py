@@ -49,6 +49,11 @@ TENANT_SCOPED_TABLES: Final[frozenset[str]] = frozenset(
         # ADR-082. Inert by construction: the gate loads `compliance_rules`
         # only, and nothing promotes a row from here to there.
         "rule_proposals",
+        # Demo spec Phase 6. Holds one integer per demo tenant — how far its
+        # clock has been advanced — kept apart from `tenants.config` on
+        # purpose, so the app role's one write here cannot reach a fatigue
+        # cap or a kill switch.
+        "demo_clock_state",
     }
 )
 

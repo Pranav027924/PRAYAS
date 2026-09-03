@@ -1,11 +1,19 @@
-"""The demo API — six read-only endpoints (Demo spec §R2).
+"""The demo API — six read-only endpoints, and one write (Demo spec §R2, Phase 6).
 
 Frozen at the end of Phase 2: the screens are built against these shapes, and
 a field that moves afterwards moves a screen with it.
 
-**Read-only, all six.** Every action this system takes goes through the
+**Read-only, six of seven.** Every action this system takes goes through the
 scheduled-action path so it is re-checked at fire time and written to the
-ledger; an endpoint here that changed state would bypass both.
+ledger; an endpoint here that changed state directly would bypass both. The
+one exception (N2) is `POST /v1/demo/clock/advance`: it writes nothing to the
+money path itself, only an offset in `demo_clock_state` — a table that holds
+nothing but that (ADR, migration `0014_demo_clock_state`), kept apart from
+`tenants.config`'s fatigue caps and kill switches on purpose. It changes no
+rule the gate evaluates — it changes what the gate, the planner, and the
+executor's poll agree "now" is for that one tenant. See `prayas.demo.clock`,
+which refuses the write outright for any tenant not seeded with
+`config.demo_tenant: true`.
 
 **The tenant comes from the verified token** (§18), never from a query
 parameter — with one deliberate exception. `tenant=all` aggregates across the
@@ -27,6 +35,8 @@ from prayas.console import metrics
 from prayas.console.api import _engine, principal, templates
 from prayas.console.auth import BATCH_RESULT, DECISION_REPLAY, Principal, authorise
 from prayas.db.tenancy import tenant_transaction
+from prayas.demo import clock as demo_clock
+from prayas.demo.clock import ClockError
 from prayas.ledger.chain import verify_chain
 from prayas.measure.replay import ReplayError
 
@@ -320,6 +330,21 @@ async def cycle_timeline(
                 {"t": who.tenant_id, "m": str(cycle.mandate_id), "c": cycle_id},
             )
         )
+        # Not yet fired, so it has neither an event nor a decision — without
+        # this a scheduled debit is invisible on its own screen until the
+        # instant it fires. Demo spec Phase 6 needs it visible *before* that,
+        # drawn ghosted, so advancing the clock has something to sweep toward.
+        pending = list(
+            await conn.execute(
+                text(
+                    "SELECT action_type, fire_at FROM scheduled_actions"
+                    " WHERE tenant_id = :t AND cycle_id = :c AND state IN ('pending', 'claimed')"
+                    " ORDER BY fire_at"
+                ),
+                {"t": who.tenant_id, "c": cycle_id},
+            )
+        )
+        now = await demo_clock.current_now(conn, who.tenant_id)
 
     timeline: list[dict[str, Any]] = []
     for evt in events:
@@ -334,6 +359,7 @@ async def cycle_timeline(
                 "kind": kind.replace(".", "_"),
                 "label": _label(kind),
                 "decision_id": None,
+                "pending": False,
             }
         )
     for row in decisions:
@@ -343,6 +369,17 @@ async def cycle_timeline(
                 "kind": str(row.action_type),
                 "label": str(row.rationale or row.action_type),
                 "decision_id": str(row.decision_id),
+                "pending": False,
+            }
+        )
+    for row in pending:
+        timeline.append(
+            {
+                "at": row.fire_at.isoformat(),
+                "kind": str(row.action_type),
+                "label": _action_label(str(row.action_type)) + " (scheduled)",
+                "decision_id": None,
+                "pending": True,
             }
         )
     timeline.sort(key=lambda e: str(e["at"]))
@@ -353,7 +390,10 @@ async def cycle_timeline(
     # pixel. Beyond the cap the axis holds the recent end and the earlier
     # events stay in the table below, which is where a long history belongs.
     moments = [datetime.fromisoformat(str(e["at"])) for e in timeline] or [cycle.due_at]
-    axis_to = max(moments) + timedelta(hours=8)
+    # `now` extends the far edge but never the off-axis count below — it is
+    # the playhead, not an event, and Phase 6's advance must keep it in frame
+    # even when it has moved past every recorded event and pending action.
+    axis_to = max([*moments, now]) + timedelta(hours=8)
     axis_from = max(min(moments) - timedelta(hours=4), axis_to - AXIS_MAX_SPAN)
     off_axis = sum(1 for m in moments if m < axis_from)
 
@@ -363,6 +403,7 @@ async def cycle_timeline(
             "to": axis_to.isoformat(),
             "off_axis": off_axis,
         },
+        "now": now.isoformat(),
         "cycle_id": str(cycle.cycle_id),
         "tenant_id": who.tenant_id,
         "mandate_id": str(cycle.mandate_id),
@@ -378,6 +419,50 @@ async def cycle_timeline(
         "events": timeline,
         "rationale": _rationale(cycle, decisions),
     }
+
+
+@router.post("/demo/clock/advance")
+async def clock_advance(
+    request: Request, body: dict[str, Any], who: Annotated[Principal, Depends(principal)]
+) -> dict[str, Any]:
+    """The one write in this API (N2) — a tenant's own virtual clock.
+
+    Three shapes: `{"seconds": n}` moves the offset by `n` (negative allowed —
+    `[ +1 hour ]`/`[ +24 hours ]`); `{"jump_to_next_action": true, "cycle_id":
+    id}` moves straight to the next thing scheduled for that cycle;
+    `{"reset": true}` zeroes it. Every path refuses unless this tenant was
+    seeded `config.demo_tenant: true` — `prayas.demo.clock` checks that
+    independently of anything decided here, so there is no branch in this
+    handler that can skip it.
+
+    Same guard as the screen this lives on (`DECISION_REPLAY`): whoever may
+    read why a cycle fired when it did is who may move the clock that decides
+    when the next one will.
+    """
+    _guard(who, DECISION_REPLAY)
+
+    async with tenant_transaction(_engine(request), who.tenant_id) as conn:
+        try:
+            if body.get("reset"):
+                now = await demo_clock.reset(conn, who.tenant_id)
+            elif body.get("jump_to_next_action"):
+                cycle_id = body.get("cycle_id")
+                if not isinstance(cycle_id, str) or not cycle_id:
+                    raise HTTPException(
+                        status_code=422, detail="jump_to_next_action needs a cycle_id"
+                    )
+                now = await demo_clock.jump_to_next_action(conn, who.tenant_id, cycle_id=cycle_id)
+            else:
+                seconds = body.get("seconds")
+                if not isinstance(seconds, int) or isinstance(seconds, bool):
+                    raise HTTPException(status_code=422, detail="seconds must be an integer")
+                now = await demo_clock.advance(conn, who.tenant_id, seconds=seconds)
+        except ClockError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+        offset = await demo_clock.offset_seconds_for(conn, who.tenant_id)
+
+    return {"tenant_id": who.tenant_id, "offset_seconds": offset, "now": now.isoformat()}
 
 
 def _occurred_at(evt: Any) -> datetime:
@@ -685,10 +770,14 @@ async def cycle_screen(
         stage = await current_stage(conn, who.tenant_id)
         row = (
             await conn.execute(
-                text("SELECT name FROM tenants WHERE tenant_id = :t"), {"t": who.tenant_id}
+                text("SELECT name, config FROM tenants WHERE tenant_id = :t"), {"t": who.tenant_id}
             )
         ).first()
     name = str(row.name) if row is not None else who.tenant_id
+    # The clock controls render only for a tenant seeded with the flag —
+    # `prayas.demo.clock` checks it again server-side on the write itself, so
+    # this is display only, never the actual guard (Demo spec Phase 6).
+    demo_tenant = bool(row is not None and (row.config or {}).get("demo_tenant") is True)
     arm = arm_for(stage, tenant_id=who.tenant_id, mandate_id=str(payload["mandate_id"]))
 
     return templates.TemplateResponse(
@@ -704,6 +793,7 @@ async def cycle_screen(
             "g": tl.build(payload),
             "pips": tl.budget_pips(payload["attempts_used"], payload["attempt_budget"]),
             "arm": str(arm),
+            "demo_tenant": demo_tenant,
             "rupees": rupees,
             "ist": ist,
             "hours": hours,

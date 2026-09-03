@@ -33,7 +33,7 @@ import contextlib
 import logging
 import signal
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -46,6 +46,7 @@ from prayas.adoption.store import current_stage
 from prayas.config import Settings
 from prayas.db.engine import create_app_engine
 from prayas.db.tenancy import system_transaction, tenant_transaction
+from prayas.demo.clock import current_now
 from prayas.domain.rails import PDN_CUTOFF_HOUR_IST, adapter_for
 from prayas.executor.claiming import STATE_CLAIMED, STATE_PENDING, active_tenants
 from prayas.executor.notice import ACTION_TYPE_NOTICE
@@ -321,9 +322,14 @@ async def plan_tenant(
     offset: int = 0,
 ) -> TickResult:
     """Plan one tenant's due cycles, starting `offset` rows into the queue."""
-    decided_at = now or datetime.now(UTC)
-
     async with tenant_transaction(engine, tenant_id) as conn:
+        # Tests pin `now`; production leaves it `None` and reads this
+        # tenant's own clock — the wall clock for everyone except a demo
+        # tenant mid-advance (Demo spec Phase 6), which sees its own offset
+        # applied. See `prayas.executor.worker.drain_tenant` for the same
+        # pattern on the firing side.
+        decided_at = now if now is not None else await current_now(conn, tenant_id)
+
         stage = await current_stage(conn, tenant_id)
         if not may_decide(stage):
             return TickResult(0, 0, 0, 0, 0, examined=0)

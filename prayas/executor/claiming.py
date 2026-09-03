@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Final
 
 from sqlalchemy import text
@@ -63,7 +63,7 @@ _CLAIM_SQL: Final = text(
            SELECT action_id
              FROM scheduled_actions
             WHERE tenant_id = :tenant_id
-              AND fire_at <= now()
+              AND fire_at <= :now
               AND state IN (:pending, :claimed)
               AND (locked_until IS NULL OR locked_until < now())
             ORDER BY fire_at
@@ -81,6 +81,7 @@ async def claim_due_actions(
     *,
     batch: int = CLAIM_BATCH,
     lease_seconds: int = LEASE_SECONDS,
+    now: datetime | None = None,
 ) -> list[ClaimedAction]:
     """Claim up to `batch` due actions for this tenant.
 
@@ -91,6 +92,13 @@ async def claim_due_actions(
     `state IN (pending, claimed)` with an expired lease is what reclaims a dead
     worker's rows — a claim whose lease has passed is indistinguishable from an
     unclaimed one, which is exactly the intent.
+
+    `now` is what counts as *due* — separate from what fire-time revalidation
+    later counts as *legal* (`fire_action`'s own `now`). Defaults to the
+    application clock, computed once here and bound as a parameter rather than
+    read from the database's `now()`, so a caller can pin it — a test, or Demo
+    spec Phase 6's per-tenant virtual clock — through the same argument
+    production leaves at its default.
     """
     result = await conn.execute(
         _CLAIM_SQL,
@@ -100,6 +108,7 @@ async def claim_due_actions(
             "pending": STATE_PENDING,
             "lease": lease_seconds,
             "batch": batch,
+            "now": now or datetime.now(UTC),
         },
     )
     return [

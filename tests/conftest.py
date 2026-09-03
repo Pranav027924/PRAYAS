@@ -187,12 +187,17 @@ async def _seed_tenant(conn: AsyncConnection, tenant: str) -> None:
         text("INSERT INTO webhook_secrets (tenant_id, secret_ref) VALUES (:t, 'WH_SEED_V1')"),
         params,
     )
+    await conn.execute(
+        text("INSERT INTO demo_clock_state (tenant_id, offset_seconds) VALUES (:t, 0)"),
+        params,
+    )
 
 
 async def _truncate_all(conn: AsyncConnection) -> None:
     await conn.execute(
         text(
-            "TRUNCATE sim_ground_truth, webhook_secrets, experiment_config, outbox, scheduled_actions,"
+            "TRUNCATE demo_clock_state, sim_ground_truth, webhook_secrets, experiment_config,"
+            " outbox, scheduled_actions,"
             " decisions, rule_proposals, inbound_replies, contact_suppressions,"
             " customer_profiles, interventions, attempts,"
             " cycles, mandates, events_raw, tenants RESTART IDENTITY CASCADE"
