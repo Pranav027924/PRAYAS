@@ -257,10 +257,24 @@ async def _onboard(
         await conn.execute(
             text(
                 "INSERT INTO tenants (tenant_id, name, config)"
-                " VALUES (:t, :n, jsonb_build_object('adoption_stage', CAST(:s AS int),"
-                "                                    'demo_tenant', true))"
+                " VALUES (:t, :n, jsonb_build_object("
+                "   'adoption_stage', CAST(:s AS int),"
+                "   'demo_tenant', true,"
+                # §30's TRAI rule reads these off the tenant. A merchant that
+                # has completed DLT registration has them; one that has not is
+                # refused the send rather than sending anyway. Seeded here as
+                # demo data, never defaulted in the engine.
+                "   'dlt_template_id', CAST(:template AS text),"
+                "   'header_series', '160',"
+                "   'dnd_registered', false,"
+                "   'fatigue_cap', 4))"
             ),
-            {"t": tenant_id, "n": spec["name"], "s": int(spec["stage"])},
+            {
+                "t": tenant_id,
+                "n": spec["name"],
+                "s": int(spec["stage"]),
+                "template": f"DLT_{tenant_id.upper()}_PDN_V1",
+            },
         )
         await conn.execute(
             text("INSERT INTO webhook_secrets (tenant_id, secret_ref) VALUES (:t, :r)"),
@@ -614,6 +628,36 @@ async def plan(rounds: int = 400) -> None:
         await engine.dispose()
 
 
+def _contact_hour(day_offset: int = 0) -> datetime:
+    """Today at 08:30 IST — a lawful instant to send a notice.
+
+    §30 confines contact to 08:00-19:00 IST, and the gate reads the clock, so a
+    seeding run must name the hour it is pretending to be rather than inherit
+    whatever hour the operator started it at. Chosen so that the debit 25 hours
+    later lands at 09:30 IST, inside NPCI's pre-10:00 execution window.
+    """
+    now = datetime.now(UTC) + timedelta(days=day_offset)
+    return now.replace(hour=3, minute=0, second=0, microsecond=0)  # 08:30 IST
+
+
+#: Every Nth round fires into NPCI's peak-morning blackout instead.
+#:
+#: The planner never *schedules* an unlawful slot, so a fleet fired entirely at
+#: a lawful hour produces no window refusals at all — and the rule that exists
+#: to catch a debit whose window closed while it sat queued would look
+#: untested. This is the real condition: the slot was lawful when chosen and
+#: was not when it fired, which is precisely what §32's fire-time
+#: revalidation is for.
+LATE_FIRE_EVERY = 7
+
+
+def _debit_hour(round_no: int) -> datetime:
+    lawful = _contact_hour() + timedelta(hours=25)  # 09:30 IST
+    if round_no % LATE_FIRE_EVERY == LATE_FIRE_EVERY - 1:
+        return lawful + timedelta(hours=2)  # 11:30 IST — closed
+    return lawful
+
+
 async def settle(rounds: int = 60) -> None:
     """Fire the planned queue through the real executor and gate.
 
@@ -648,10 +692,19 @@ async def settle(rounds: int = 60) -> None:
                     )
                 )
             if notices.rowcount:
+                # Pinned inside §30's 08:00-19:00 IST contact window. The gate
+                # now checks it, so seeding at the wall clock would silently
+                # produce a fleet with no notices whenever the run happened to
+                # start in the evening — and therefore no lawful debits either.
                 for tenant in tenants:
-                    await drain_tenant(engine, tenant, provider)
+                    await drain_tenant(engine, tenant, provider, now=_contact_hour())
 
-            later = datetime.now(UTC) + timedelta(hours=25)
+            # 25 hours after the *notice*, not after the wall clock. The gate
+            # computes `hours_since(pdn_sent_at)` from the instant it is given,
+            # and the notice was pinned to the contact window — anchoring the
+            # debit anywhere else makes the elapsed time whatever the operator's
+            # local hour happens to imply.
+            later = _debit_hour(round_no)
             async with engine.begin() as conn:
                 debits = await conn.execute(
                     text(

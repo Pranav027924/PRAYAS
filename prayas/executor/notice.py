@@ -36,12 +36,14 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from prayas.domain.rails import hour_ist
 from prayas.executor.claiming import (
     STATE_CANCELLED,
     STATE_DONE,
     ClaimedAction,
     release_action,
 )
+from prayas.gate.engine import evaluate
 from prayas.ledger.chain import append
 from prayas.memory.forget import pseudonymise
 from prayas.observability import metrics
@@ -50,6 +52,9 @@ log = logging.getLogger(__name__)
 
 #: `scheduled_actions.action_type` for a pre-debit notice.
 ACTION_TYPE_NOTICE = "pdn_notice"
+
+#: §24.6's ceiling when a tenant has not set its own.
+DEFAULT_FATIGUE_CAP = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +92,47 @@ async def _suppressed(conn: AsyncConnection, tenant_id: str, customer_id: str) -
     return str(row.reason) if row is not None else None
 
 
+async def _message_context(
+    conn: AsyncConnection,
+    action: ClaimedAction,
+    cycle: Any,
+    profile: Any,
+    sent_at: datetime,
+) -> dict[str, Any]:
+    """Facts §30's messaging rules evaluate against, read at send time.
+
+    `dlt_template_id` and the header series come from the tenant's own
+    configuration, because they are registration facts about that merchant —
+    a deployment without DLT registration has none, and `TRAI-DLT-TEMPLATE`
+    then refuses the send rather than the send happening anyway.
+    """
+    row = (
+        await conn.execute(
+            text("SELECT config FROM tenants WHERE tenant_id = :t"),
+            {"t": action.tenant_id},
+        )
+    ).first()
+    config: dict[str, Any] = (row.config or {}) if row is not None else {}
+
+    return {
+        "hour_ist": hour_ist(sent_at),
+        "consent_ref": cycle.consent_ref,
+        "consent_withdrawn": bool(profile.consent_withdrawn) if profile else False,
+        "messages_30d": int(profile.messages_30d) if profile else 0,
+        "tenant_fatigue_cap": int(config.get("fatigue_cap", DEFAULT_FATIGUE_CAP)),
+        "dlt_template_id": config.get("dlt_template_id"),
+        "header_series": str(config.get("header_series", "")),
+        "dnd_registered": bool(config.get("dnd_registered", False)),
+        "action_type": "sms",
+        "amount_paise": cycle.amount_paise,
+        "mcc": None,
+        "pdn_sent_at": cycle.pdn_sent_at,
+        "attempts_used": 0,
+        "attempt_budget": 0,
+        "is_next_day_debit": False,
+    }
+
+
 async def fire_notice(
     conn: AsyncConnection,
     action: ClaimedAction,
@@ -103,7 +149,8 @@ async def fire_notice(
     cycle = (
         await conn.execute(
             text(
-                "SELECT c.cycle_id, c.state, c.pdn_sent_at, m.customer_id"
+                "SELECT c.cycle_id, c.state, c.pdn_sent_at, c.amount_paise,"
+                "       m.customer_id, m.consent_ref"
                 "  FROM cycles c"
                 "  JOIN mandates m ON m.tenant_id = c.tenant_id AND m.mandate_id = c.mandate_id"
                 " WHERE c.tenant_id = :t AND c.cycle_id = :c"
@@ -130,6 +177,46 @@ async def fire_notice(
         await release_action(conn, action.action_id, action.tenant_id, state=STATE_DONE)
         metrics.increment("notice_skipped", reason="already_sent")
         return NoticeOutcome(False, "already_sent", action.cycle_id)
+
+    # §30's messaging rules — contact window, DLT template, consent, fatigue —
+    # live in the same pack as the debit rules and were being bypassed
+    # entirely: this path called the gate zero times. A notice sent at 03:00,
+    # or above the fatigue cap, or to a customer who withdrew consent, is as
+    # much a breach as an unlawful debit, and the rules exist to stop it.
+    profile = (
+        await conn.execute(
+            text(
+                "SELECT COALESCE(p.messages_30d, 0) AS messages_30d,"
+                "       COALESCE(p.consent_withdrawn, false) AS consent_withdrawn"
+                "  FROM mandates m"
+                "  LEFT JOIN customer_profiles p"
+                "         ON p.tenant_id = m.tenant_id AND p.customer_id = m.customer_id"
+                " WHERE m.tenant_id = :t AND m.mandate_id = :m"
+            ),
+            {"t": action.tenant_id, "m": action.mandate_id},
+        )
+    ).first()
+
+    messaging = await evaluate(
+        conn,
+        action_type="sms",
+        rail=None,
+        ctx=await _message_context(conn, action, cycle, profile, sent_at),
+        as_of=sent_at.date(),
+        now=sent_at,
+    )
+    if not messaging.allowed:
+        await release_action(conn, action.action_id, action.tenant_id, state=STATE_CANCELLED)
+        metrics.increment("notice_gate_denied", verdict=messaging.verdict)
+        log.info(
+            "notice.gate_denied",
+            extra={
+                "cycle_id": action.cycle_id,
+                "verdict": messaging.verdict,
+                "refused": [c["rule_id"] for c in messaging.checks if c.get("verdict") != "ALLOW"],
+            },
+        )
+        return NoticeOutcome(False, f"gate:{messaging.verdict}", action.cycle_id)
 
     suppression = await _suppressed(conn, action.tenant_id, str(cycle.customer_id))
     if suppression is not None:

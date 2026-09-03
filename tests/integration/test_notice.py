@@ -40,7 +40,12 @@ async def _seed(
         ):
             await conn.execute(text(f"DELETE FROM {table} WHERE tenant_id = :t"), {"t": TENANT})
         await conn.execute(
-            text("INSERT INTO tenants (tenant_id, name, config) VALUES (:t, :t, '{}'::jsonb)"),
+            text(
+                "INSERT INTO tenants (tenant_id, name, config) VALUES (:t, :t,"
+                " jsonb_build_object('dlt_template_id', 'DLT_TEST_V1',"
+                "   'header_series', '160', 'dnd_registered', false,"
+                "   'fatigue_cap', 4))"
+            ),
             {"t": TENANT},
         )
         await conn.execute(
@@ -84,6 +89,15 @@ async def _seed(
         )
 
 
+def _in_contact_window() -> datetime:
+    """An instant inside §30's 08:00-19:00 IST contact window.
+
+    Pinned because the wall clock decides whether a send is lawful, and a suite
+    that passes only between 08:00 and 19:00 IST is not a suite.
+    """
+    return datetime(2026, 9, 3, 6, 0, tzinfo=UTC)  # 11:30 IST
+
+
 def _action() -> ClaimedAction:
     return ClaimedAction(
         action_id="act_notice",
@@ -121,7 +135,7 @@ async def test_sending_records_pdn_and_leaves_the_budget_alone(owner_engine: Asy
     before = await _cycle(owner_engine)
 
     async with owner_engine.begin() as conn:
-        outcome = await fire_notice(conn, _action())
+        outcome = await fire_notice(conn, _action(), now=_in_contact_window())
 
     after = await _cycle(owner_engine)
     assert outcome.sent
@@ -137,7 +151,7 @@ async def test_the_notice_is_recorded_in_the_ledger(owner_engine: AsyncEngine) -
     """
     await _seed(owner_engine)
     async with owner_engine.begin() as conn:
-        await fire_notice(conn, _action())
+        await fire_notice(conn, _action(), now=_in_contact_window())
 
     async with owner_engine.begin() as conn:
         decisions = list(
@@ -178,7 +192,7 @@ async def test_a_suppressed_customer_is_not_messaged(owner_engine: AsyncEngine) 
             ),
             {"t": TENANT, "ref": pseudonymise(TENANT, CUSTOMER)},
         )
-        outcome = await fire_notice(conn, _action())
+        outcome = await fire_notice(conn, _action(), now=_in_contact_window())
 
     assert not outcome.sent
     assert outcome.reason.startswith("suppressed:")
@@ -209,7 +223,7 @@ async def test_an_erased_customer_is_still_suppressed(owner_engine: AsyncEngine)
             ),
             {"t": TENANT, "ref": ref},
         )
-        outcome = await fire_notice(conn, _action())
+        outcome = await fire_notice(conn, _action(), now=_in_contact_window())
 
     assert not outcome.sent
     assert (await _cycle(owner_engine))["pdn_sent_at"] is None
@@ -222,7 +236,7 @@ async def test_a_second_notice_does_not_resend(owner_engine: AsyncEngine) -> Non
     before = await _cycle(owner_engine)
 
     async with owner_engine.begin() as conn:
-        outcome = await fire_notice(conn, _action())
+        outcome = await fire_notice(conn, _action(), now=_in_contact_window())
 
     assert not outcome.sent
     assert outcome.reason == "already_sent"
@@ -234,7 +248,7 @@ async def test_a_settled_cycle_needs_no_notice(owner_engine: AsyncEngine) -> Non
     """§32 revalidates at fire time: a cycle that paid while queued is done."""
     await _seed(owner_engine, state="succeeded")
     async with owner_engine.begin() as conn:
-        outcome = await fire_notice(conn, _action())
+        outcome = await fire_notice(conn, _action(), now=_in_contact_window())
 
     assert not outcome.sent
     assert outcome.reason == "cycle_settled"
@@ -265,3 +279,54 @@ async def test_withdrawn_consent_denies_the_debit(owner_engine: AsyncEngine) -> 
 
     _Cycle.consent_withdrawn = False
     assert _gate_context(_Cycle(), _action(), datetime.now(UTC))["consent_withdrawn"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_notice_passes_the_messaging_gate_before_it_is_sent(
+    owner_engine: AsyncEngine,
+) -> None:
+    """§30's messaging rules were bypassed entirely — this path called the gate
+    zero times.
+
+    A notice sent at 03:00, above the fatigue cap, or to a customer who
+    withdrew consent is as much a breach as an unlawful debit, and those rules
+    are in the same pack as the debit rules.
+    """
+    await _seed(owner_engine)
+    async with owner_engine.begin() as conn:
+        # No DLT registration on this tenant: TRAI-DLT-TEMPLATE must refuse.
+        await conn.execute(
+            text("UPDATE tenants SET config = config - 'dlt_template_id' WHERE tenant_id = :t"),
+            {"t": TENANT},
+        )
+        outcome = await fire_notice(conn, _action())
+
+    assert not outcome.sent
+    assert outcome.reason.startswith("gate:")
+    assert (await _cycle(owner_engine))["pdn_sent_at"] is None, (
+        "a refused notice must not unlock the debit"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_registered_tenant_may_send(owner_engine: AsyncEngine) -> None:
+    """The counterpart: with registration in place the same notice goes out.
+
+    Asserted alongside the refusal so the gate is shown to be discriminating
+    rather than simply blocking everything.
+    """
+    await _seed(owner_engine)
+    async with owner_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE tenants SET config = config || jsonb_build_object("
+                "  'dlt_template_id', 'DLT_TEST_V1', 'header_series', '160',"
+                "  'dnd_registered', false, 'fatigue_cap', 4)"
+                " WHERE tenant_id = :t"
+            ),
+            {"t": TENANT},
+        )
+        outcome = await fire_notice(conn, _action(), now=_in_contact_window())
+
+    assert outcome.sent, outcome.reason
+    assert (await _cycle(owner_engine))["pdn_sent_at"] is not None

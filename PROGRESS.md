@@ -1593,6 +1593,27 @@ The strip exists precisely because a missing service fails *silently* — the st
 
 **c) The seeded churn was silently rejected.** `subscription.cancelled` was emitted on `ACTIVE` mandates, but §11's machine has no such edge — a mandate goes `ACTIVE → AT_RISK → REVOKED`. The projector counted `stale_transition{illegal_transition}` and moved on, so 541 cancellation events produced **zero** revocations and survival sat flat at 0.0 through several runs. The seeder now emits `subscription.halted` first, which is both what the machine allows and what Razorpay actually does after repeated failures. 528 mandates now revoke, and fitfirst's survival lift reads **+1.86 pts with a 95% CI of [−0.46, +4.17]** — an interval that *includes* zero, and is reported as such rather than as an effect.
 
+### FINDING-P17-17 · 2026-09-03 · ✅ RESOLVED — the notice path never called the gate
+**Observed.** `PRAYAS-FATIGUE-CAP` had never produced a refusal, and the reason turned out not to be the rule. It carries `applies_to: [sms, whatsapp]`, so it cannot apply to a debit by design — and `fire_notice` called `evaluate()` **zero times**. Four rules in the pack govern messaging, and the path that sends messages consulted none of them.
+
+**What that permitted.** A pre-debit notice could be sent outside §30's 08:00–19:00 contact window, above §24.6's fatigue cap, without a DLT-registered template or header series, or to a customer who had withdrawn consent. The manual contact-suppression check in that function covered one narrow case and read like coverage of the whole area.
+
+Invariant 1 is written about debits, and the messaging rules sat in the same pack, cited in the same ledger, enforced nowhere. A notice is an action taken against a person; §32's reasoning applies to it unchanged.
+
+**Fix.** `fire_notice` evaluates the gate as `action_type="sms"` before sending, with the facts read at send time: the contact hour, the customer's `messages_30d` and consent state, and the tenant's DLT registration. A refusal cancels the action and records the verdict, and `pdn_sent_at` stays null — so a notice that was not sent cannot unlock the debit that depended on it.
+
+**DLT registration is tenant configuration, not an engine default.** `dlt_template_id`, `header_series` and `dnd_registered` are read from `tenants.config`. A deployment that has not completed registration therefore has none, and `TRAI-DLT-TEMPLATE` refuses the send rather than the send happening anyway — which is the honest behaviour and matches `docs/BLOCKERS.md` §1.2. The demo fleet is seeded with a registration, as a merchant would hold after registering; it is never defaulted in code.
+
+**Two consequences the seeding then exposed.**
+
+*Sends must name their hour.* The gate reads the clock, so a seed run started at 06:14 IST produced **zero** notices — every send fell outside the contact window and was correctly refused. The seeder now pins sends to 08:30 IST rather than inheriting whatever hour the operator began at.
+
+*The debit clock anchors to the notice, not the wall.* `hours_since(pdn_sent_at)` is computed from the instant the gate is given; anchoring the debit to `now()` made the elapsed time depend on the operator's local hour.
+
+*And the hour has to be lawful.* The first pinned debit hour was 12:30 IST — inside NPCI's peak-morning blackout — so 1,110 debits were refused on the window rule and only 69 allowed. Now 09:30 IST, with every seventh round deliberately fired two hours later into the closed window: the planner never schedules an unlawful slot, so without that a fleet fired entirely at a lawful hour would leave the window rule looking untested. A slot that was lawful when chosen and unlawful when it fired is exactly what fire-time revalidation exists to catch.
+
+**Result.** All four rules §R3.2 asks for now produce refusals from genuine conditions: `RBI-EMANDATE-PDN-24H` 634, `NPCI-AUTOPAY-WINDOW` 145, `DPDP-CONSENT-VALID` 30, `RBI-EMANDATE-AFA-CAP` 1 — against 517 allowed debits.
+
 ## Spec errata found (documentation only, no code impact)
 
 - **§4 (line 193) cites "§21.4" for reply parsing residency.** §21 is the liquidity hazard model and has no subsections; the content is in **§41.3**. Found in Phase 13.
