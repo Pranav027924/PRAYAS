@@ -1614,6 +1614,32 @@ Invariant 1 is written about debits, and the messaging rules sat in the same pac
 
 **Result.** All four rules §R3.2 asks for now produce refusals from genuine conditions: `RBI-EMANDATE-PDN-24H` 634, `NPCI-AUTOPAY-WINDOW` 145, `DPDP-CONSENT-VALID` 30, `RBI-EMANDATE-AFA-CAP` 1 — against 517 allowed debits.
 
+### ADR-106 · 2026-09-03 · The cycle timeline draws the mask, not a picture of it
+**Decision:** `console/timeline.py` and `templates/cycle.html` at `/console/cycle/{id}` (Demo spec §R4.2).
+
+Hand-rolled inline SVG, geometry computed server-side. Three visualisations in the whole demo: a charting library costs more setup than it saves, and every one of them wants a CDN (N3).
+
+**The shaded bands are `RailAdapter.is_execution_legal` rendered**, not a restatement of it — the same adapter the sequencer solved against. That is the point rather than a nicety: "NPCI restricts execution windows" is a claim; the debit sitting inside one is evidence, and a band drawn from a second source could contradict the mask without anyone noticing.
+
+**Three things the screen refuses to imply.**
+
+*An event before the axis is dropped, not clamped.* Drawing a month-old failure at the frame edge puts it beside this morning's debit and implies they were adjacent — a stronger claim than the picture is entitled to make. The count of off-axis events is stated in the caption instead.
+
+*The axis is capped at four days.* A cycle whose failure precedes its retry by a month produced **138 hourly window bands and 138 ticks**, with every marker in the same pixel. The cap holds the recent end; older events stay in the table, which is where a long history belongs.
+
+*The budget bar cannot show more used than exists.* A cycle whose `attempts_used` exceeds its budget is a bug upstream, and rendering five pips out of four would compound it.
+
+**The rationale panel is read, never composed.** Every line comes from the decision record: the chosen instant, the notice time, the hours of notice, the binding constraint. Verified on both an allowed cycle (notice 03 Sep 08:30, debit 04 Sep 09:30, 25h, binding `RBI-EMANDATE-PDN-24H`) and a denied one (`gate returned DENY at fire time` at 11:30 IST, inside NPCI's peak-morning blackout).
+
+**A borrowed guard, removed.** The screen first obtained health by calling `portfolio_summary`, which authorises on `BATCH_RESULT` — a screen a compliance reviewer has no business opening. Reusing the call reused its permission, and the cycle page returned 403 for exactly the role that most needs it. Health and stage are now read directly.
+
+### FINDING-P17-18 · 2026-09-03 · ✅ RESOLVED — the cycle timeline showed every cycle's events
+**Observed.** The timeline for one cycle listed failures from June, July and August.
+
+**Cause.** The endpoint selected events by `mandate_id`. A mandate failing on the 28th of three consecutive months has three cycles, and all of their events landed on each cycle's screen — so the axis spanned 90 days and the episode the screen exists to narrate was a few pixels wide.
+
+**Fix.** Events are scoped to the cycle by the payload's `invoice_id`, which is the same key the projector groups cycles on.
+
 ## Spec errata found (documentation only, no code impact)
 
 - **§4 (line 193) cites "§21.4" for reply parsing residency.** §21 is the liquidity hazard model and has no subsections; the content is in **§41.3**. Found in Phase 13.

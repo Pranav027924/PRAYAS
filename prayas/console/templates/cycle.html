@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}{{ c.cycle_id }} — PRAYAS{% endblock %}
+{% block heading %}Cycle {{ c.cycle_id }}{% endblock %}
+{% block subheading %}
+  {{ tenant_name }} · {{ rupees(c.amount_paise) }} · {{ rail_label(c.rail) }}
+  · <span class="chip {{ 'held' if arm == 'holdout' else 'stage' }}">{{ arm }} arm</span>
+{% endblock %}
+
+{% block body %}
+
+<section class="card">
+  <h2>Attempt budget</h2>
+  <div class="body">
+    {# §1: one execution plus up to three retries, then the cycle is over.
+       Drawn depleting because scarcity is the thesis. #}
+    <div class="pips">
+      {% for pip in pips %}<span class="pip {{ pip }}"></span>{% endfor %}
+      <span class="pips-label">{{ c.attempts_used }} of {{ c.attempt_budget }} used</span>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Timeline</h2>
+  <div class="body tl-wrap">
+    <svg class="tl" viewBox="0 0 {{ g.width }} {{ g.height }}"
+         width="100%" height="{{ g.height }}" role="img"
+         aria-label="Cycle timeline with NPCI execution windows">
+
+      {# ── the argument: NPCI's lawful execution windows, drawn ──────────
+           Rendered from the same rail adapter the sequencer solved against,
+           so the picture cannot disagree with the mask. #}
+      {% for b in g.bands %}
+      <rect class="band" x="{{ '%.1f'|format(b.x) }}" y="{{ g.band_top }}"
+            width="{{ '%.1f'|format(b.width) }}" height="{{ g.band_h }}"></rect>
+      {% endfor %}
+
+      <line class="axis" x1="16" y1="{{ g.axis_y }}" x2="{{ g.width - 16 }}" y2="{{ g.axis_y }}"></line>
+
+      {% for t in g.ticks %}
+      <line class="tick" x1="{{ '%.1f'|format(t.x) }}" y1="{{ g.axis_y - 4 }}"
+            x2="{{ '%.1f'|format(t.x) }}" y2="{{ g.axis_y + 4 }}"></line>
+      <text class="tick-label" x="{{ '%.1f'|format(t.x) }}" y="{{ g.axis_y + 18 }}"
+            text-anchor="middle">{{ t.label }}</text>
+      {% endfor %}
+
+      {# ── the 24-hour notice floor: a hard edge between notice and debit ── #}
+      {% if g.notice_x is not none and g.debit_x is not none %}
+      <line class="floor" x1="{{ '%.1f'|format(g.notice_x) }}" y1="{{ g.band_top - 8 }}"
+            x2="{{ '%.1f'|format(g.debit_x) }}" y2="{{ g.band_top - 8 }}"></line>
+      <text class="floor-label"
+            x="{{ '%.1f'|format((g.notice_x + g.debit_x) / 2) }}"
+            y="{{ g.band_top - 13 }}" text-anchor="middle">
+        {{ hours(c.rationale.hours_of_notice) }} of notice — floor is 24h
+      </text>
+      {% endif %}
+
+      {% for m in g.markers %}
+      <g class="mk {{ m.kind }} {{ 'deny' if m.verdict and m.verdict != 'ALLOW' }}">
+        <line x1="{{ '%.1f'|format(m.x) }}" y1="{{ g.axis_y }}"
+              x2="{{ '%.1f'|format(m.x) }}" y2="{{ 26 - m.row * 9 }}"></line>
+        <circle cx="{{ '%.1f'|format(m.x) }}" cy="{{ g.axis_y }}" r="4"></circle>
+        <text x="{{ '%.1f'|format(m.x) }}" y="{{ 21 - m.row * 9 }}"
+              text-anchor="middle">{{ ist(m.at, "%d %b %H:%M") }}</text>
+      </g>
+      {% endfor %}
+    </svg>
+    <p class="foot">
+      Shaded bands are lawful execution windows for {{ rail_label(c.rail) }}. Times IST.
+      {% if c.axis.off_axis %}
+        {{ c.axis.off_axis }} earlier event{{ 's' if c.axis.off_axis > 1 }} fall outside this
+        window and {{ 'are' if c.axis.off_axis > 1 else 'is' }} listed below.
+      {% endif %}
+    </p>
+  </div>
+</section>
+
+<div class="split">
+  <section class="card">
+    <h2>What happened</h2>
+    <table>
+      <tr><th>When (IST)</th><th>Event</th><th class="right">Decision</th></tr>
+      {% for e in c.events %}
+      <tr>
+        <td>{{ ist(e.at) }}</td>
+        <td>{{ e.label }}</td>
+        <td class="right">
+          {% if e.decision_id %}
+            <a href="/console/ledger?decision={{ e.decision_id }}">rules &rarr;</a>
+          {% else %}<span class="foot">—</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </section>
+
+  {# ── every line pulled from the decision record, never composed here ──── #}
+  <section class="card">
+    <h2>Why this hour</h2>
+    <div class="body">
+      {% if c.rationale.chosen_at %}
+      <p><b>{{ ist(c.rationale.chosen_at) }}</b> — {{ c.rationale.rationale }}</p>
+      <table>
+        <tr><td>Notice sent</td><td class="right">{{ ist(c.rationale.pdn_sent_at) }}</td></tr>
+        <tr><td>Notice given</td><td class="right">{{ hours(c.rationale.hours_of_notice) }}</td></tr>
+        <tr><td>Binding constraint</td>
+            <td class="right"><code>{{ c.rationale.binding_constraint or '—' }}</code></td></tr>
+        <tr><td>Deadline</td><td class="right">{{ ist(c.deadline_at, "%d %b") }}</td></tr>
+      </table>
+      <p class="foot">
+        The engine moved the debit later so a lawful notice could precede it.
+        Two regulations interacting, resolved without anyone deciding it.
+      </p>
+      {% else %}
+      <p class="foot">No debit has been decided for this cycle yet.</p>
+      {% endif %}
+    </div>
+  </section>
+</div>
+{% endblock %}

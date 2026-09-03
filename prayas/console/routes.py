@@ -43,6 +43,11 @@ DEMO_TENANTS = ("fitfirst", "streamly", "edtechco")
 #: §R2 caps a ledger page. A cursor pages further.
 MAX_LEDGER_LIMIT = 200
 
+#: The widest span the timeline draws. Long enough for a full notice-to-debit
+#: episode with room either side; short enough that the hourly execution
+#: windows stay distinguishable.
+AXIS_MAX_SPAN = timedelta(days=4)
+
 
 def _guard(who: Principal, screen: str) -> None:
     from prayas.console.auth import AuthError
@@ -299,14 +304,19 @@ async def cycle_timeline(
                 {"t": who.tenant_id, "c": cycle_id},
             )
         )
+        # Scoped to *this* cycle. Querying by mandate put every other cycle's
+        # failures on the screen — a mandate failing on the 28th of three
+        # months showed all three, so the axis spanned 90 days and the episode
+        # the screen exists to narrate was three unreadable pixels.
         events = list(
             await conn.execute(
                 text(
                     "SELECT event_type, received_at, payload FROM events_raw"
                     " WHERE tenant_id = :t AND mandate_id = :m AND signature_ok"
+                    "   AND payload#>>'{payload,payment,entity,invoice_id}' = :c"
                     " ORDER BY received_at"
                 ),
-                {"t": who.tenant_id, "m": str(cycle.mandate_id)},
+                {"t": who.tenant_id, "m": str(cycle.mandate_id), "c": cycle_id},
             )
         )
 
@@ -336,7 +346,22 @@ async def cycle_timeline(
         )
     timeline.sort(key=lambda e: str(e["at"]))
 
+    # The axis the screen draws: the recovery *episode*, not the mandate's
+    # life. Capped, because a cycle whose failure is a month before its retry
+    # spans 34 days — 138 hourly window bands, every marker in the same
+    # pixel. Beyond the cap the axis holds the recent end and the earlier
+    # events stay in the table below, which is where a long history belongs.
+    moments = [datetime.fromisoformat(str(e["at"])) for e in timeline] or [cycle.due_at]
+    axis_to = max(moments) + timedelta(hours=8)
+    axis_from = max(min(moments) - timedelta(hours=4), axis_to - AXIS_MAX_SPAN)
+    off_axis = sum(1 for m in moments if m < axis_from)
+
     return {
+        "axis": {
+            "from": axis_from.isoformat(),
+            "to": axis_to.isoformat(),
+            "off_axis": off_axis,
+        },
         "cycle_id": str(cycle.cycle_id),
         "tenant_id": who.tenant_id,
         "mandate_id": str(cycle.mandate_id),
@@ -348,7 +373,7 @@ async def cycle_timeline(
         "due_at": cycle.due_at.isoformat(),
         "deadline_at": cycle.deadline_at.isoformat() if cycle.deadline_at else None,
         "pdn_sent_at": cycle.pdn_sent_at.isoformat() if cycle.pdn_sent_at else None,
-        "windows": _windows(str(cycle.rail), cycle.due_at),
+        "windows": _windows(str(cycle.rail), axis_from, axis_to),
         "events": timeline,
         "rationale": _rationale(cycle, decisions),
     }
@@ -377,8 +402,8 @@ def _label(event_type: str) -> str:
     }.get(event_type, event_type)
 
 
-def _windows(rail: str, due_at: datetime) -> list[dict[str, str]]:
-    """The rail's lawful execution windows across the cycle's first days.
+def _windows(rail: str, start: datetime, end: datetime) -> list[dict[str, str]]:
+    """The rail's lawful execution windows across the drawn axis.
 
     Drawn from the rail adapter rather than restated, so the bands on screen
     and the mask the DP solved against cannot disagree.
@@ -387,18 +412,19 @@ def _windows(rail: str, due_at: datetime) -> list[dict[str, str]]:
     from prayas.sequencer.windows import slot_times
 
     adapter = adapter_for(rail)
-    times = slot_times(due_at, 72, 60)
+    span = max(int((end - start).total_seconds() // 3600) + 1, 2)
+    times = slot_times(start, span, 60)
     out: list[dict[str, str]] = []
-    start: datetime | None = None
+    run_start: datetime | None = None
     for moment in times:
         legal = adapter.is_execution_legal(moment)
-        if legal and start is None:
-            start = moment
-        elif not legal and start is not None:
-            out.append({"from": start.isoformat(), "to": moment.isoformat()})
-            start = None
-    if start is not None:
-        out.append({"from": start.isoformat(), "to": times[-1].isoformat()})
+        if legal and run_start is None:
+            run_start = moment
+        elif not legal and run_start is not None:
+            out.append({"from": run_start.isoformat(), "to": moment.isoformat()})
+            run_start = None
+    if run_start is not None:
+        out.append({"from": run_start.isoformat(), "to": times[-1].isoformat()})
     return out
 
 
@@ -621,6 +647,58 @@ async def portfolio_screen(
             "ist": ist,
             "guard_label": _guard_label,
             "guard_value": _guard_value,
+            "rail_label": _rail_label,
+        },
+    )
+
+
+@pages.get("/cycle/{cycle_id}", response_class=HTMLResponse)
+async def cycle_screen(
+    request: Request, cycle_id: str, who: Annotated[Principal, Depends(principal)]
+) -> HTMLResponse:
+    """**Screen 2 — the narrative.** One cycle, and why it fired when it did.
+
+    Renders `/v1/cycles/{id}/timeline`; the geometry is derived from the same
+    rail adapter the sequencer solved against, so the bands on screen are the
+    mask rather than a picture of it.
+    """
+    from prayas.adoption.cohort import arm_for
+    from prayas.adoption.store import current_stage
+    from prayas.console import timeline as tl
+    from prayas.console.format import hours, ist, rupees
+
+    payload = await cycle_timeline(request, cycle_id, who)
+    # Health and the tenant list directly, rather than borrowing them from the
+    # portfolio summary — that call guards on a screen a compliance reviewer
+    # has no business opening, and pulling it in here made this page require a
+    # permission it does not need.
+    health = await _health(request, [who.tenant_id])
+    async with tenant_transaction(_engine(request), who.tenant_id) as conn:
+        stage = await current_stage(conn, who.tenant_id)
+        row = (
+            await conn.execute(
+                text("SELECT name FROM tenants WHERE tenant_id = :t"), {"t": who.tenant_id}
+            )
+        ).first()
+    name = str(row.name) if row is not None else who.tenant_id
+    arm = arm_for(stage, tenant_id=who.tenant_id, mandate_id=str(payload["mandate_id"]))
+
+    return templates.TemplateResponse(
+        request=request,
+        name="cycle.html",
+        context={
+            "screen": "portfolio",
+            "tenant": who.tenant_id,
+            "tenant_name": name,
+            "tenants": [],
+            "health": health,
+            "c": payload,
+            "g": tl.build(payload),
+            "pips": tl.budget_pips(payload["attempts_used"], payload["attempt_budget"]),
+            "arm": str(arm),
+            "rupees": rupees,
+            "ist": ist,
+            "hours": hours,
             "rail_label": _rail_label,
         },
     )

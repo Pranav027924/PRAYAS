@@ -173,3 +173,30 @@ td.right, th.right { text-align: right; }
   .metrics { grid-template-columns: repeat(3, 1fr); }
   .metric:nth-child(3n+1) { border-left: 0; }
 }
+
+/* ── cycle timeline (§R4.2) ─────────────────────────────────────────────── */
+
+.pips { display: flex; align-items: center; gap: 7px; }
+.pip { width: 22px; height: 10px; border-radius: 2px; background: var(--line); }
+.pip.used { background: var(--accent); }
+.pips-label { margin-left: 10px; color: var(--ink-2); font-size: 13px; }
+
+.tl-wrap { overflow-x: auto; }
+.tl { display: block; min-width: 720px; }
+
+/* The bands are the argument, so they carry the only fill on the chart. */
+.tl .band { fill: var(--accent-sub); }
+.tl .axis { stroke: var(--line); stroke-width: 1.5; }
+.tl .tick { stroke: var(--ink-3); stroke-width: 1; }
+.tl .tick-label { fill: var(--ink-3); font-size: 10.5px; }
+
+.tl .floor { stroke: var(--warn); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.tl .floor-label { fill: var(--warn); font-size: 11px; font-weight: 600; }
+
+.tl .mk line { stroke: var(--ink-3); stroke-width: 1; }
+.tl .mk circle { fill: var(--ink); }
+.tl .mk text { fill: var(--ink-2); font-size: 10.5px; }
+.tl .mk.pdn_notice circle { fill: var(--warn); }
+.tl .mk.debit_attempt circle { fill: var(--ok); }
+.tl .mk.deny circle { fill: var(--deny); }
+.tl .mk.payment_failed circle { fill: var(--deny); }
