@@ -640,7 +640,8 @@ def _contact_hour(day_offset: int = 0) -> datetime:
     return now.replace(hour=3, minute=0, second=0, microsecond=0)  # 08:30 IST
 
 
-#: Every Nth round fires into NPCI's peak-morning blackout instead.
+#: Debits fired into NPCI's peak-morning blackout per round, rather than at
+#: the lawful hour with the rest of that round's batch.
 #:
 #: The planner never *schedules* an unlawful slot, so a fleet fired entirely at
 #: a lawful hour produces no window refusals at all — and the rule that exists
@@ -648,12 +649,19 @@ def _contact_hour(day_offset: int = 0) -> datetime:
 #: untested. This is the real condition: the slot was lawful when chosen and
 #: was not when it fired, which is precisely what §32's fire-time
 #: revalidation is for.
-LATE_FIRE_EVERY = 7
+#:
+#: A *slice of each round* rather than every Nth whole round, because the
+#: round count is a function of batch size and fleet size, not of anything
+#: meaningful: when `SETTLE_ROUND_BATCH` rose to 600, settle stopped needing
+#: 34 rounds and needed 3, the every-7th-round trigger never fired once, and
+#: `NPCI-AUTOPAY-WINDOW` silently dropped from 147 refusals to none. Slicing
+#: keeps the proportion stable however the batching moves.
+LATE_FIRE_SLICE = 50
 
 
-def _debit_hour(round_no: int) -> datetime:
+def _debit_hour(*, late: bool = False) -> datetime:
     lawful = _contact_hour() + timedelta(hours=25)  # 09:30 IST
-    if round_no % LATE_FIRE_EVERY == LATE_FIRE_EVERY - 1:
+    if late:
         return lawful + timedelta(hours=2)  # 11:30 IST — closed
     return lawful
 
@@ -723,26 +731,37 @@ async def settle(rounds: int = 60) -> None:
             # and the notice was pinned to the contact window — anchoring the
             # debit anywhere else makes the elapsed time whatever the operator's
             # local hour happens to imply.
-            later = _debit_hour(round_no)
-            async with engine.begin() as conn:
-                debits = await conn.execute(
-                    text(
-                        "UPDATE scheduled_actions SET fire_at = now() - interval '1 minute'"
-                        " WHERE action_id IN (SELECT a.action_id FROM scheduled_actions a"
-                        "   WHERE a.state = 'pending' AND a.action_type = 'debit_attempt'"
-                        "   ORDER BY a.fire_at LIMIT :limit)"
-                    ),
-                    {"limit": SETTLE_ROUND_BATCH},
-                )
-            if debits.rowcount:
+            #
+            # Two passes: the bulk at the lawful hour, then a slice two hours
+            # later into NPCI's closed window (see LATE_FIRE_SLICE). Each pass
+            # claims exactly what it just made due, so neither inherits the
+            # other's instant.
+            debits = 0
+            for late, size in (
+                (False, SETTLE_ROUND_BATCH - LATE_FIRE_SLICE),
+                (True, LATE_FIRE_SLICE),
+            ):
+                async with engine.begin() as conn:
+                    marked = await conn.execute(
+                        text(
+                            "UPDATE scheduled_actions SET fire_at = now() - interval '1 minute'"
+                            " WHERE action_id IN (SELECT a.action_id FROM scheduled_actions a"
+                            "   WHERE a.state = 'pending' AND a.action_type = 'debit_attempt'"
+                            "   ORDER BY a.fire_at LIMIT :limit)"
+                        ),
+                        {"limit": size},
+                    )
+                if not marked.rowcount:
+                    continue
+                debits += marked.rowcount
                 for tenant in tenants:
                     await drain_tenant(
-                        engine, tenant, provider, batch=SETTLE_ROUND_BATCH, now=later
+                        engine, tenant, provider, batch=size, now=_debit_hour(late=late)
                     )
 
-            if not notices.rowcount and not debits.rowcount:
+            if not notices.rowcount and not debits:
                 break
-            _say(f"    round {round_no + 1}: {notices.rowcount} notices, {debits.rowcount} debits")
+            _say(f"    round {round_no + 1}: {notices.rowcount} notices, {debits} debits")
     finally:
         await engine.dispose()
 
