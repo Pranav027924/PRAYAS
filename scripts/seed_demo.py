@@ -658,6 +658,19 @@ def _debit_hour(round_no: int) -> datetime:
     return lawful
 
 
+#: Matches the `LIMIT 600` each round's `UPDATE` marks due below. FINDING-
+#: P17-19's fix decoupled claim eligibility from the gate's own `now`, which
+#: closed the original hole but opened a narrower one: `claim_due_actions`'s
+#: default batch (50) claims far fewer than the 600 a round makes due, so
+#: the leftover pending notices sit un-claimed and get swept up by the very
+#: next `drain_tenant` call regardless of action type — the *debit* pass,
+#: seconds later, evaluating them at the debit's instant instead of their
+#: own. Matching the claim batch to the update batch drains a round's
+#: notices completely inside its own pass, so nothing is left for the debit
+#: pass to inherit.
+SETTLE_ROUND_BATCH = 600
+
+
 async def settle(rounds: int = 60) -> None:
     """Fire the planned queue through the real executor and gate.
 
@@ -688,16 +701,22 @@ async def settle(rounds: int = 60) -> None:
                         "UPDATE scheduled_actions SET fire_at = now() - interval '2 minutes'"
                         " WHERE action_id IN (SELECT action_id FROM scheduled_actions"
                         "   WHERE state = 'pending' AND action_type = 'pdn_notice'"
-                        "   ORDER BY fire_at LIMIT 600)"
-                    )
+                        "   ORDER BY fire_at LIMIT :limit)"
+                    ),
+                    {"limit": SETTLE_ROUND_BATCH},
                 )
             if notices.rowcount:
                 # Pinned inside §30's 08:00-19:00 IST contact window. The gate
                 # now checks it, so seeding at the wall clock would silently
                 # produce a fleet with no notices whenever the run happened to
                 # start in the evening — and therefore no lawful debits either.
+                # `batch` matches the UPDATE above so this pass claims every
+                # notice it just made due, leaving none for the debit pass to
+                # inherit at the wrong instant (see SETTLE_ROUND_BATCH).
                 for tenant in tenants:
-                    await drain_tenant(engine, tenant, provider, now=_contact_hour())
+                    await drain_tenant(
+                        engine, tenant, provider, batch=SETTLE_ROUND_BATCH, now=_contact_hour()
+                    )
 
             # 25 hours after the *notice*, not after the wall clock. The gate
             # computes `hours_since(pdn_sent_at)` from the instant it is given,
@@ -711,12 +730,15 @@ async def settle(rounds: int = 60) -> None:
                         "UPDATE scheduled_actions SET fire_at = now() - interval '1 minute'"
                         " WHERE action_id IN (SELECT a.action_id FROM scheduled_actions a"
                         "   WHERE a.state = 'pending' AND a.action_type = 'debit_attempt'"
-                        "   ORDER BY a.fire_at LIMIT 600)"
-                    )
+                        "   ORDER BY a.fire_at LIMIT :limit)"
+                    ),
+                    {"limit": SETTLE_ROUND_BATCH},
                 )
             if debits.rowcount:
                 for tenant in tenants:
-                    await drain_tenant(engine, tenant, provider, now=later)
+                    await drain_tenant(
+                        engine, tenant, provider, batch=SETTLE_ROUND_BATCH, now=later
+                    )
 
             if not notices.rowcount and not debits.rowcount:
                 break
