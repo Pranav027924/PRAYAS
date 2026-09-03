@@ -161,6 +161,14 @@ HERO_TENANT: Final = "fitfirst"
 HERO_CYCLE: Final = "cyc_7f3a91"
 HERO_AMOUNT: Final = 249900
 
+#: Share of lawfully-fired debits the rail actually captures. The engine
+#: choosing a good hour improves the odds; it does not make the account have
+#: money. Confirming all of them read as a 92.96% treatment recovery rate
+#: against a 17.4% holdout — the "perfect rate reads as fabricated" this
+#: module's docstring warns about, and the first number a room of payments
+#: people would challenge.
+LIVE_CAPTURE_RATE: Final = 0.70
+
 HISTORY_DAYS: Final = 90
 
 
@@ -767,17 +775,26 @@ async def settle(rounds: int = 60) -> None:
 
 
 async def _confirm_captures(base_url: str, seed_value: str) -> int:
-    """Close the loop on every live-fired, allowed debit (N1: through the
-    same signed pipeline every other event uses, never a direct write).
+    """Answer every live-fired, allowed debit the way a rail would (N1:
+    through the same signed pipeline every other event uses, never a direct
+    write).
 
     `_hero_events` only ever emits the failure — its own docstring calls the
     hero cycle "the clean story the timeline screen renders", and the rest of
     that story (notice, gated debit, recovery) is supposed to come from the
     pipeline genuinely running. Without this step it stopped one event short:
-    a debit `settle()` fires and the gate ALLOWs never gets its capture
-    confirmation, so the cycle stays `executing` with `recovered_paise = 0`
-    forever — the one cycle the demo script's core beat clicks into shows no
-    recovery at all.
+    a debit `settle()` fires and the gate ALLOWs never gets its confirmation,
+    so the cycle stays `executing` with `recovered_paise = 0` forever — the
+    one cycle the demo script's core beat clicks into shows no recovery.
+
+    **Not all of them capture**, and that is the point of `LIVE_CAPTURE_RATE`.
+    A lawful, well-timed debit still lands on an account that may still be
+    empty; confirming every one of them put the treated arm's recovery rate
+    at **92.96%** against a holdout of 17.4%, which is exactly the "perfect
+    rate reads as fabricated" this module's own docstring warns about. The
+    rest come back `payment.failed`, which is both truthful and what keeps
+    §R3.2's ~62% in reach. Deterministic in the cycle id, so a reseed at the
+    same `--seed` reproduces the same split.
     """
     engine = create_async_engine(os.environ["PRAYAS_DATABASE_URL_OWNER"])
     try:
@@ -796,6 +813,12 @@ async def _confirm_captures(base_url: str, seed_value: str) -> int:
 
         by_tenant: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
+            # The hero cycle always recovers: it is the one the script walks
+            # through end to end, and a demo whose worked example lands on
+            # the unlucky side of a coin flip is not a demo.
+            captured = str(row.cycle_id) == HERO_CYCLE or (
+                random.Random(f"{seed_value}:capture:{row.cycle_id}").random() < LIVE_CAPTURE_RATE
+            )
             sub = {
                 "entity": {
                     "id": row.mandate_id,
@@ -803,11 +826,32 @@ async def _confirm_captures(base_url: str, seed_value: str) -> int:
                 }
             }
             payment = {
-                "id": f"pay_{row.cycle_id}_captured",
+                "id": f"pay_{row.cycle_id}_{'captured' if captured else 'failed'}",
                 "amount": int(row.amount_paise),
                 "currency": "INR",
                 "invoice_id": row.cycle_id,
             }
+            if not captured:
+                by_tenant.setdefault(str(row.tenant_id), []).append(
+                    {
+                        "_id": f"{row.cycle_id}_retry_failed",
+                        "event": "payment.failed",
+                        "payload": {
+                            "subscription": sub,
+                            "payment": {
+                                "entity": {
+                                    **payment,
+                                    "status": "failed",
+                                    "error_code": "BAD_REQUEST_ERROR",
+                                    "error_source": "bank",
+                                    "error_reason": "insufficient_funds",
+                                }
+                            },
+                        },
+                        "created_at": int(row.ts.timestamp()) + 180,
+                    }
+                )
+                continue
             by_tenant.setdefault(str(row.tenant_id), []).append(
                 {
                     "_id": f"{row.cycle_id}_captured",
@@ -834,10 +878,7 @@ async def _confirm_captures(base_url: str, seed_value: str) -> int:
         for _ in range(30):
             async with engine.begin() as conn:
                 remaining = await conn.scalar(
-                    text(
-                        "SELECT count(*) FROM events_raw"
-                        " WHERE event_type = 'payment.captured' AND processed_at IS NULL"
-                    )
+                    text("SELECT count(*) FROM events_raw WHERE processed_at IS NULL")
                 )
             if not remaining:
                 break

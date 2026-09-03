@@ -1659,11 +1659,53 @@ Hashes are shown head-and-tail: the middle carries nothing a reader can use, and
 
 **The guard is unconditional and checked first, always.** `advance`, `reset` and `jump_to_next_action` each call the same `_require_demo_tenant` before touching anything — reading `tenants.config.demo_tenant`, which this module can see but never write. `test_advance_refuses_a_tenant_without_the_demo_flag` and its two siblings assert this directly; a fourth test bounds a single advance to 30 days so a typo cannot send a tenant's clock decades forward. The three demo tenants already carry `demo_tenant: true` from the seeder (Phase 1) — never defaulted in the engine.
 
-**Claiming's clock and firing's clock are now the same clock, by parameter rather than by coincidence.** `claim_due_actions` took `now()` from Postgres directly; it now takes an explicit `:now`, resolved once per tenant per tick and passed to both claiming and firing, so "what is due" and "what is legal" agree on the instant even though they remain separate questions. A non-demo tenant's offset is always zero (no row in `demo_clock_state`), so `now_for(0)` is exactly `datetime.now(UTC)` — this is additive, not a behaviour change, for every tenant that never calls the endpoint.
+**Claiming reads the tenant's own clock; the gate reads whatever instant its caller hands it.** `claim_due_actions` took `now()` from Postgres directly; it now takes an explicit `:now`, resolved per tenant per tick from `current_now` — the wall clock plus any demo advance. A non-demo tenant's offset is always zero (no row in `demo_clock_state`), so this is additive rather than a behaviour change for anyone who never calls the endpoint. *This paragraph originally read "claiming's clock and firing's clock are now the same clock" — collapsing the two, which FINDING-P17-19 below had to undo. What is due and what is legal remain separate questions with separately resolved answers.*
 
 **The cycle timeline draws what it could not draw before: the thing that hasn't happened yet.** A scheduled action has neither an event nor a decision until it fires, so `/v1/cycles/{id}/timeline` now also reads `scheduled_actions` for the cycle and adds pending markers, ghosted (dashed line, hollow circle, "(scheduled)") rather than lit — N4's honesty extended to time, not just to outcome. The axis absorbs `now` too, so the playhead is always in frame. On advance, the client eases the playhead to the new position over one CSS transition, then reloads once — the one orchestrated motion moment the spec allows, and everything downstream of the reload is the server rendering real state rather than a client re-implementing Jinja.
 
 **What was not built.** Backdating a timestamp to fake elapsed time, or advancing the clock without moving the underlying claim/gate logic, were both rejected in the Class A discussion — either would make `RBI-EMANDATE-PDN-24H` pass because it was told to rather than because 24 virtual hours actually elapsed by the gate's own arithmetic, which is precisely what the spec's "not bypassed, not backdated" line rules out.
+
+### FINDING-P17-19 · 2026-09-04 · ✅ RESOLVED — claim eligibility moved with the gate's clock
+
+**Observed.** A full reseed after Phase 6 denied **every one of 1,216 debits** on `RBI-EMANDATE-PDN-24H`. An earlier run had allowed roughly 517. The ledger showed why in one line: each cycle's `pdn_notice` and `debit_attempt` decisions carried the *identical* timestamp, so `hours_since_pdn` was zero.
+
+**Cause.** Phase 6 gave `claim_due_actions` an explicit `now` and `drain_tenant` fed it the same instant callers pass for gate evaluation. `settle()` deliberately keeps two clocks apart: it drains notices at a *past* simulated hour and debits at a *future* one, seconds apart in real time. A notice the past-pointing pass failed to claim was claimed by the future-pointing debit pass instead — and fired at the debit's own instant, writing `pdn_sent_at = fired_at`.
+
+**Fix.** Claim eligibility always resolves from `current_now` regardless of what a caller passes for the gate. The regression test reproduces the two-pass shape directly and asserts the notice's instant survives it.
+
+### FINDING-P17-20 · 2026-09-04 · ✅ RESOLVED — a round's notices spilled into its own debit pass
+
+**Observed.** P17-19's fix took allowed debits from 0 to 516, and the hero cycle *still* denied — same signature, one timestamp for both decisions.
+
+**Cause.** Narrower, and only visible once the first hole was closed. Each round's `UPDATE` marks up to 600 notices due, but `claim_due_actions` defaults to a batch of **50** and filters on no action type at all. The other 550 stayed pending, and the very next `drain_tenant` call — the same round's debit pass — claimed them along with the debits.
+
+**Fix.** The claim batch matches the update batch, so a round's notices are drained inside their own pass. Allowed debits went 516 → **1,069**.
+
+### FINDING-P17-21 · 2026-09-04 · ✅ RESOLVED — an allowed debit never became a recovered one
+
+**Observed.** Zero of 521 live-fired, gate-allowed debits ever reached `state = succeeded`. `cyc_7f3a91` — the hero cycle the demo script tells the room to click into — sat at `recovered_paise = 0` permanently.
+
+**Cause.** `_hero_events` emits only the failure; its own comment calls the hero cycle "the clean story the timeline screen renders" and expects the pipeline to produce the rest. It produced all of it except the last step: nothing ever posted the `payment.captured` confirmation that a real rail sends back asynchronously, so the projector had nothing to fold.
+
+**Fix.** `_confirm_captures` posts one through the same signed pipeline every other event uses (N1) — no direct write to `cycles`. Wired into `--stage settle`.
+
+### FINDING-P17-22 · 2026-09-04 · ✅ RESOLVED — one dropped connection aborted the whole reseed
+
+**Observed.** A reseed stopped dead after ingest with no error, leaving the fleet onboarded but never decided or fired. Nothing in the log said so; the script simply did not continue.
+
+**Cause.** `seed-demo.sh` runs under `set -e`, and `main()` returned exit 1 on *any* failed post. Exactly **1 of 52,600** concurrent webhook posts had dropped its connection — ordinary noise at that concurrency.
+
+**Fix.** A 0.5% tolerance (floor 5) distinguishes noise from a systemic failure, which rejects nearly everything rather than one in fifty thousand. Worth stating plainly: this one would have fired on demo morning, and the failure mode is silence.
+
+### FINDING-P17-23 · 2026-09-04 · ✅ RESOLVED — the blackout was coupled to the round count
+
+**Observed.** `NPCI-AUTOPAY-WINDOW` refusals went from 147 to **zero**, and nothing failed to say so.
+
+**Cause.** P17-20's larger batch dropped settle from 34 rounds to 3. The blackout fired every 7th round, so it never fired at all. The round count is a function of batch size and fleet size, not of anything meaningful — the trigger was hung on an incidental number.
+
+**Fix.** A fixed slice of each round fires two hours late instead. The window rule is the one the timeline's shaded bands illustrate, so losing it silently takes the evidence out from under the demo's central beat.
+
+**The pattern across all five.** Every one was found by looking at the seeded fleet's numbers rather than by a failing test, and three of them were *created* by the fix before them. The seeder is the only place where the engine's real clocks, batches and gates all interact under a compressed timeline, and it had no assertions of its own — which is why a 100%-denial rate could survive a green 1,470-test suite.
 
 ## Spec errata found (documentation only, no code impact)
 
