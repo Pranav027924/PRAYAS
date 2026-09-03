@@ -76,26 +76,37 @@ async def drain_tenant(
 ) -> TickResult:
     """Claim and fire one tenant's due actions, then relay their intents.
 
-    `now` is the instant fire-time revalidation and the gate evaluate against,
-    and also what claiming treats as *due* (`claim_due_actions`'s own `now`;
-    what is due and what is legal remain different questions, now answered
-    from the same clock instead of two). Tests pin it, because the gate's NPCI
-    window check would otherwise make them pass or fail on the hour they
-    happened to run at.
+    Claiming and firing are answered from *two independently resolved*
+    clocks, on purpose (restoring, not just repeating, what the pre-Phase-6
+    code did — see FINDING-P17-19 below).
 
-    Production leaves it `None`, and this tenant's own clock is read instead
-    of assuming the wall clock: every tenant gets `datetime.now(UTC)` except a
-    demo tenant mid-advance (Demo spec Phase 6), which gets that plus its
-    stored offset. `current_now` returns the wall clock outright for a tenant
-    with no offset, so this is not a behaviour change for anyone who never
-    calls `POST /v1/demo/clock/advance`.
+    **What is due** — `claim_due_actions`'s own `now` — is always this
+    tenant's own current instant (`current_now`): the wall clock, plus a demo
+    tenant's stored advance (Demo spec Phase 6). Never overridden by the
+    `now` parameter below, no matter what a caller passes it for.
+
+    **What is legal** — the instant fire-time revalidation and the gate
+    evaluate against — is `now` when a caller supplies one (tests pin it, so
+    the gate's NPCI window check doesn't pass or fail on the hour the suite
+    happens to run), and otherwise the same `current_now` claiming just used.
+
+    FINDING-P17-19: collapsing these to one clock broke the seeder's two-pass
+    settle — a notice pinned to a past simulated hour failed to claim under
+    that clock, so the *debit* pass's later, future-pointing simulated hour
+    claimed the still-pending notice too and fired it at the debit's own
+    instant. `pdn_sent_at` landed equal to `fired_at`, `hours_since_pdn`
+    computed to zero, and every debit was denied on `RBI-EMANDATE-PDN-24H` —
+    100% of them, in a run that previously allowed the majority. The fix is
+    the one-line separation above: claiming was never supposed to move when a
+    caller substitutes a different instant for the *gate's* reasoning.
     """
     async with tenant_transaction(engine, tenant_id) as conn:
-        effective_now = now if now is not None else await current_now(conn, tenant_id)
+        claim_now = await current_now(conn, tenant_id)
         actions = await claim_due_actions(
-            conn, tenant_id, batch=batch, lease_seconds=lease_seconds, now=effective_now
+            conn, tenant_id, batch=batch, lease_seconds=lease_seconds, now=claim_now
         )
 
+    fire_now = now if now is not None else claim_now
     fired = refused = 0
     for action in actions:
         # One transaction per action: a refusal for one must not unwind
@@ -105,11 +116,11 @@ async def drain_tenant(
                 # A notice never reaches the rail and never spends attempt
                 # budget (ADR-099). Routing it through `fire_action` would do
                 # both, charging §1's retry allowance for a message.
-                notice = await fire_notice(conn, action, now=effective_now)
+                notice = await fire_notice(conn, action, now=fire_now)
                 fired += 1 if notice.sent else 0
                 refused += 0 if notice.sent else 1
                 continue
-            outcome = await fire_action(conn, action, now=effective_now)
+            outcome = await fire_action(conn, action, now=fire_now)
         if outcome.fired:
             fired += 1
         else:

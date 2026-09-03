@@ -169,3 +169,123 @@ async def test_a_failing_tick_does_not_kill_the_loop(
     await asyncio.wait_for(task, timeout=5)
 
     assert ExplodingProvider.calls > 0, "the failing path was never exercised"
+
+
+# ── FINDING-P17-19: claim eligibility must not move with the gate's `now` ──
+
+#: 08:30 IST, 24.5 hours before FIRE_AT (09:00 IST) — inside §30's contact
+#: window, and a lawful notice-to-debit gap.
+NOTICE_AT = FIRE_AT - timedelta(hours=24, minutes=30)
+TWO_PASS_TENANT = "t_two_pass"
+
+
+async def _seed_two_pass_cycle(conn: object) -> None:
+    """One cycle carrying both a due notice and a debit not due yet — the
+    seeder's `settle()` shape: the debit's own `fire_at` update comes later,
+    once the notice pass has had its chance to claim on its own."""
+    now = datetime.now(UTC)
+    await conn.execute(  # type: ignore[attr-defined]
+        text(
+            "INSERT INTO tenants (tenant_id, name, config) VALUES"
+            " (:t, :t, jsonb_build_object('adoption_stage', 4,"
+            " 'dlt_template_id', 'DLT_TEST_V1', 'header_series', '160',"
+            " 'dnd_registered', false, 'fatigue_cap', 4))"
+        ),
+        {"t": TWO_PASS_TENANT},
+    )
+    await conn.execute(  # type: ignore[attr-defined]
+        text(
+            "INSERT INTO mandates (mandate_id,tenant_id,customer_id,rail,"
+            "max_amount_paise,state,consent_ref,created_at,mcc)"
+            " VALUES ('m1',:t,'cu1','upi_autopay',5000000,'active','c1',:n,'5411')"
+        ),
+        {"t": TWO_PASS_TENANT, "n": now},
+    )
+    await conn.execute(  # type: ignore[attr-defined]
+        text(
+            "INSERT INTO cycles (cycle_id,tenant_id,mandate_id,seq_no,amount_paise,"
+            "due_at,deadline_at,attempt_budget,attempts_used,state)"
+            " VALUES ('c1',:t,'m1',1,49900,:n,:d,4,0,'executing')"
+        ),
+        {"t": TWO_PASS_TENANT, "n": now, "d": now + timedelta(days=20)},
+    )
+    await conn.execute(  # type: ignore[attr-defined]
+        text(
+            "INSERT INTO scheduled_actions (action_id,tenant_id,cycle_id,mandate_id,"
+            "action_type,fire_at,state,payload)"
+            " VALUES ('a_notice',:t,'c1','m1','pdn_notice',:f,'pending','{}'::jsonb)"
+        ),
+        {"t": TWO_PASS_TENANT, "f": now - timedelta(minutes=1)},
+    )
+    # Far in the future — not a real claim candidate until the second UPDATE
+    # below moves it, mirroring `settle()`'s own two-step choreography.
+    await conn.execute(  # type: ignore[attr-defined]
+        text(
+            "INSERT INTO scheduled_actions (action_id,tenant_id,cycle_id,mandate_id,"
+            "action_type,fire_at,state,payload)"
+            " VALUES ('a_debit',:t,'c1','m1','debit_attempt',:f,'pending','{}'::jsonb)"
+        ),
+        {"t": TWO_PASS_TENANT, "f": now + timedelta(days=100)},
+    )
+
+
+async def test_a_future_gate_now_does_not_also_claim_a_still_pending_notice(
+    app_engine: AsyncEngine, owner_engine: AsyncEngine
+) -> None:
+    """FINDING-P17-19.
+
+    The seeder's `settle()` drains notices at a *past* simulated instant and
+    debits at a *future* one, seconds apart in real time. Claim eligibility
+    must stay tied to the tenant's own real clock regardless of which `now`
+    a caller supplies for the gate's own reasoning — otherwise the debit
+    pass's future-pointing `now` also claims whatever notice the earlier,
+    past-pointing pass left pending, fires it at the debit's own instant, and
+    `hours_since_pdn` reads zero instead of the true gap. That collapsed
+    every debit in a full reseed to `RBI-EMANDATE-PDN-24H` DENY.
+    """
+    async with owner_engine.begin() as conn:
+        await conn.execute(text(_WIPE))
+        await _seed_two_pass_cycle(conn)
+
+    provider = FakeProvider()
+    first = await drain_tenant(app_engine, TWO_PASS_TENANT, provider, now=NOTICE_AT)
+    assert first.claimed == 1, "the debit (fire_at 100 days out) must not be claimable yet"
+    assert first.fired == 1, "the notice must have sent"
+
+    async with tenant_transaction(app_engine, TWO_PASS_TENANT) as conn:
+        pdn_sent_at = await conn.scalar(
+            text("SELECT pdn_sent_at FROM cycles WHERE cycle_id = 'c1'")
+        )
+    assert pdn_sent_at == NOTICE_AT, (
+        f"pdn_sent_at was {pdn_sent_at}, expected the notice pass's own instant {NOTICE_AT} — "
+        "a later pass's `now` must never move it"
+    )
+
+    # Make the debit due for real, exactly as settle()'s second UPDATE does.
+    async with owner_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE scheduled_actions SET fire_at = now() - interval '1 minute'"
+                " WHERE action_id = 'a_debit'"
+            )
+        )
+
+    second = await drain_tenant(app_engine, TWO_PASS_TENANT, provider, now=FIRE_AT)
+    assert second.claimed == 1, f"claimed {second.claimed}, expected exactly the debit"
+
+    async with tenant_transaction(app_engine, TWO_PASS_TENANT) as conn:
+        decision = (
+            await conn.execute(
+                text(
+                    "SELECT verdict, rationale FROM decisions"
+                    " WHERE tenant_id = :t AND action_type = 'debit_attempt'"
+                    " ORDER BY ts DESC LIMIT 1"
+                ),
+                {"t": TWO_PASS_TENANT},
+            )
+        ).first()
+    assert decision is not None
+    assert decision.verdict == "ALLOW", (
+        f"debit was {decision.verdict} ({decision.rationale}) — hours_since_pdn should read "
+        "~24.5h, not 0, since the notice's own instant must not have moved"
+    )
