@@ -725,6 +725,88 @@ async def settle(rounds: int = 60) -> None:
         await engine.dispose()
 
 
+async def _confirm_captures(base_url: str, seed_value: str) -> int:
+    """Close the loop on every live-fired, allowed debit (N1: through the
+    same signed pipeline every other event uses, never a direct write).
+
+    `_hero_events` only ever emits the failure — its own docstring calls the
+    hero cycle "the clean story the timeline screen renders", and the rest of
+    that story (notice, gated debit, recovery) is supposed to come from the
+    pipeline genuinely running. Without this step it stopped one event short:
+    a debit `settle()` fires and the gate ALLOWs never gets its capture
+    confirmation, so the cycle stays `executing` with `recovered_paise = 0`
+    forever — the one cycle the demo script's core beat clicks into shows no
+    recovery at all.
+    """
+    engine = create_async_engine(os.environ["PRAYAS_DATABASE_URL_OWNER"])
+    try:
+        async with engine.begin() as conn:
+            rows = list(
+                await conn.execute(
+                    text(
+                        "SELECT d.tenant_id, d.cycle_id, c.mandate_id, c.amount_paise, d.ts"
+                        "  FROM decisions d"
+                        "  JOIN cycles c ON c.tenant_id = d.tenant_id AND c.cycle_id = d.cycle_id"
+                        " WHERE d.action_type = 'debit_attempt' AND d.verdict = 'ALLOW'"
+                        "   AND c.state <> 'succeeded'"
+                    )
+                )
+            )
+
+        by_tenant: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            sub = {
+                "entity": {
+                    "id": row.mandate_id,
+                    "current_end": int(row.ts.timestamp()) + 30 * 86400,
+                }
+            }
+            payment = {
+                "id": f"pay_{row.cycle_id}_captured",
+                "amount": int(row.amount_paise),
+                "currency": "INR",
+                "invoice_id": row.cycle_id,
+            }
+            by_tenant.setdefault(str(row.tenant_id), []).append(
+                {
+                    "_id": f"{row.cycle_id}_captured",
+                    "event": "payment.captured",
+                    "payload": {
+                        "subscription": sub,
+                        "payment": {"entity": {**payment, "status": "captured"}},
+                    },
+                    # A few minutes after the debit fired — the real lag
+                    # between submission and the rail's async confirmation.
+                    "created_at": int(row.ts.timestamp()) + 180,
+                }
+            )
+
+        stats = Stats()
+        for tenant_id, events in by_tenant.items():
+            await _post_all(
+                base_url, tenant_id, webhook_secret(seed_value, tenant_id), events, 48, stats
+            )
+
+        # The projector container is still running (only `executor` is
+        # stopped around settle), so give it a moment to fold these before
+        # the caller reads `cycles.state` for a summary.
+        for _ in range(30):
+            async with engine.begin() as conn:
+                remaining = await conn.scalar(
+                    text(
+                        "SELECT count(*) FROM events_raw"
+                        " WHERE event_type = 'payment.captured' AND processed_at IS NULL"
+                    )
+                )
+            if not remaining:
+                break
+            await asyncio.sleep(1)
+
+        return stats.posted
+    finally:
+        await engine.dispose()
+
+
 async def seed(base_url: str, seed_value: str, concurrency: int, *, stage: str = "all") -> Stats:
     owner = os.environ.get("PRAYAS_DATABASE_URL_OWNER")
     if not owner:
@@ -792,7 +874,12 @@ def main() -> int:
 
     started = datetime.now(UTC)
     if args.stage in {"plan", "settle"}:
-        asyncio.run(plan() if args.stage == "plan" else settle())
+        if args.stage == "plan":
+            asyncio.run(plan())
+        else:
+            asyncio.run(settle())
+            posted = asyncio.run(_confirm_captures(args.base_url, args.seed))
+            _say(f"    {posted:,} capture confirmations posted")
         _say(f"  settle took {(datetime.now(UTC) - started).total_seconds():.0f}s")
         return 0
     stats = asyncio.run(seed(args.base_url, args.seed, args.concurrency, stage=args.stage))
