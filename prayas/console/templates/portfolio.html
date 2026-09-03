@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Portfolio — PRAYAS{% endblock %}
+{% block heading %}Portfolio{% endblock %}
+{% block subheading %}
+  {{ 'All tenants' if tenant == 'all' else tenant_name }} ·
+  {{ window.from }} to {{ window.to }} ·
+  <span class="chip stage">{{ stage }}</span>
+{% endblock %}
+
+{% block body %}
+
+{# ── the matched pair. One card, one border (N4). Structurally impossible
+     to show recovery without survival beside it. ────────────────────────── #}
+<section class="pair">
+  <h2>Incremental effect, against a permanent holdout</h2>
+  <div class="halves">
+    <div class="half">
+      <div class="pair-label">Incremental recovery</div>
+      <div class="pair-value">{{ rupees(pair.incremental_recovery_paise) }}</div>
+      <div class="pair-ci">
+        {% if pair.incremental_recovery_ci %}
+          95% CI {{ lakh(pair.incremental_recovery_ci[0]) }} – {{ lakh(pair.incremental_recovery_ci[1]) }}
+        {% else %}
+          interval suppressed — arms too thin to approximate
+        {% endif %}
+      </div>
+      <div class="pair-note">
+        treatment {{ '{:,}'.format(pair.treatment_n) }} ·
+        <span class="chip held">holdout {{ '{:,}'.format(pair.holdout_n) }} ({{ pair.holdout_pct }}%)</span>
+      </div>
+    </div>
+    <div class="half">
+      <div class="pair-label">Incremental survival</div>
+      <div class="pair-value{{ ' none' if pair.incremental_survival_pts is none }}">
+        {% if pair.incremental_survival_pts is not none %}
+          {{ pct(pair.incremental_survival_pts, signed=True) }}
+        {% else %}not measurable{% endif %}
+      </div>
+      <div class="pair-ci">
+        {% if pair.incremental_survival_ci %}
+          95% CI {{ pct(pair.incremental_survival_ci[0], signed=True) }} –
+          {{ pct(pair.incremental_survival_ci[1], signed=True) }}
+        {% elif pair.incremental_survival_pts is none %}
+          an arm is too thin to compare — shown as absent, not as zero
+        {% else %}
+          interval suppressed
+        {% endif %}
+      </div>
+      <div class="pair-note">
+        mandates still active at window end. Recovery without survival is how a
+        dunning system destroys value while appearing to create it.
+      </div>
+    </div>
+  </div>
+</section>
+
+{# ── efficiency. Every figure carries the baseline it is against. ───────── #}
+<section class="card">
+  <h2>Efficiency</h2>
+  <div class="metrics">
+    <div class="metric">
+      <div class="metric-label">Attempts per recovery</div>
+      {% if eff.attempts_per_recovery is not none %}
+        <div class="metric-value">{{ eff.attempts_per_recovery }}</div>
+        <div class="metric-base">holdout {{ eff.attempts_per_recovery_baseline or '—' }}</div>
+      {% else %}
+        <div class="metric-value none">—</div>
+        <div class="metric-base">not measurable at this scope</div>
+      {% endif %}
+    </div>
+    <div class="metric">
+      <div class="metric-label">Permanent fixes</div>
+      <div class="metric-value">{{ '{:,}'.format(eff.permanent_fixes) }}</div>
+      <div class="metric-base">date changes proposed</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">Messages per cycle</div>
+      {% if eff.messages_per_customer_cycle is not none %}
+        <div class="metric-value">{{ eff.messages_per_customer_cycle }}</div>
+        <div class="metric-base">cap {{ eff.fatigue_cap }}</div>
+      {% else %}
+        <div class="metric-value none">—</div>
+        <div class="metric-base">cap {{ eff.fatigue_cap }}</div>
+      {% endif %}
+    </div>
+    {# Absent rather than guessed: prevention needs a counterfactual on cycles
+       that never failed, cost needs a rail price sheet. #}
+    <div class="metric">
+      <div class="metric-label">Prevention rate</div>
+      <div class="metric-value none">not measured</div>
+      <div class="metric-base">needs a counterfactual on cycles that did not fail</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">Cost per ₹ recovered</div>
+      <div class="metric-value none">not measured</div>
+      <div class="metric-base">target &lt; {{ pct(eff.cost_target * 100) }}</div>
+    </div>
+  </div>
+</section>
+
+{# ── guardrails, always visible, including when unflattering ────────────── #}
+<section class="card">
+  <h2>Guardrails</h2>
+  {% for g in guardrails %}
+  <div class="guard">
+    <span class="mark">{% if g.status == 'ok' %}<span class="chip ok">✓</span>{% else %}<span class="chip deny">✗</span>{% endif %}</span>
+    <span class="key">{{ guard_label(g.key) }}</span>
+    <span class="val">{{ guard_value(g) }}</span>
+    <span class="thr">{{ g.threshold }}</span>
+  </div>
+  {% endfor %}
+</section>
+
+<div class="split">
+  <section class="card">
+    <h2>Rails</h2>
+    <ul class="rails">
+      {% for r in rails %}
+      <li><span>{{ rail_label(r.rail) }}</span>
+          <b>{{ pct(r.share * 100, digits=0) }}</b></li>
+      {% endfor %}
+    </ul>
+    <div class="body foot">
+      Three rails, one engine. We abstract your rails, not payment processors.
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Live</h2>
+    <ul class="ticker" id="ticker">
+      {% for e in events %}
+      <li><span class="t">{{ ist(e.at, "%H:%M:%S") }}</span>
+          <span class="k">{{ e.kind }} {{ e.subject }}</span>
+          <span class="chip {{ 'ok' if e.verdict == 'ALLOW' else 'deny' }}">{{ e.verdict }}</span></li>
+      {% else %}
+      <li class="empty">Nothing in the last 30 minutes.</li>
+      {% endfor %}
+    </ul>
+  </section>
+</div>
+
+<p class="foot">
+  Every figure on this page is computed from the pipeline's own output. Where
+  the data cannot support one it says so rather than showing a number.
+  Times IST.
+</p>
+{% endblock %}

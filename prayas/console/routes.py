@@ -20,15 +20,20 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 from sqlalchemy import text
 
 from prayas.console import metrics
-from prayas.console.api import _engine, principal
+from prayas.console.api import _engine, principal, templates
 from prayas.console.auth import BATCH_RESULT, DECISION_REPLAY, Principal, authorise
-from prayas.db.tenancy import system_transaction, tenant_transaction
+from prayas.db.tenancy import tenant_transaction
 from prayas.measure.replay import ReplayError
 
 router = APIRouter(prefix="/v1", tags=["demo"])
+
+#: The screens. Separate router so the JSON API keeps its own prefix and the
+#: pages keep theirs.
+pages = APIRouter(prefix="/console", tags=["screens"])
 
 #: The demo fleet. `tenant=all` spans exactly these and nothing else — an
 #: aggregate over "every tenant in the database" would be a cross-tenant read
@@ -112,7 +117,7 @@ async def portfolio_summary(
     if len(targets) == 1:
         async with tenant_transaction(_engine(request), targets[0]) as conn:
             payload = await metrics.portfolio(conn, targets[0], window_days=days)
-        payload["health"] = await _health(request)
+        payload["health"] = await _health(request, targets)
         return payload
 
     # Aggregate. Summed where a sum is meaningful, recomputed where it is not:
@@ -122,11 +127,16 @@ async def portfolio_summary(
     for tenant_id in targets:
         async with tenant_transaction(_engine(request), tenant_id) as conn:
             parts.append(await metrics.portfolio(conn, tenant_id, window_days=days))
-    return _merge(parts, health=await _health(request))
+    return _merge(parts, health=await _health(request, targets))
 
 
 def _merge(parts: list[dict[str, Any]], *, health: list[dict[str, Any]]) -> dict[str, Any]:
     pairs = [p["matched_pair"] for p in parts]
+    measurable = [
+        float(p["incremental_survival_pts"])
+        for p in pairs
+        if p["incremental_survival_pts"] is not None
+    ]
     total_treat = sum(int(p["treatment_n"]) for p in pairs)
     total_hold = sum(int(p["holdout_n"]) for p in pairs)
     # Weighted by mandates, not averaged. Three single-rail tenants would
@@ -150,8 +160,11 @@ def _merge(parts: list[dict[str, Any]], *, health: list[dict[str, Any]]) -> dict
             # Intervals do not add. Suppressed rather than summed into a number
             # that would look like a confidence statement and be none.
             "incremental_recovery_ci": None,
-            "incremental_survival_pts": round(
-                sum(float(p["incremental_survival_pts"]) for p in pairs) / len(pairs), 2
+            # Only tenants whose arms could support the comparison. Averaging a
+            # suppressed lift as zero would understate; treating a thin arm's
+            # +100 as real overstated it by exactly that much.
+            "incremental_survival_pts": (
+                round(sum(measurable) / len(measurable), 2) if measurable else None
             ),
             "incremental_survival_ci": None,
             "holdout_pct": round(100 * total_hold / (total_hold + total_treat))
@@ -212,29 +225,44 @@ def _merge_guardrails(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(by_key.values())
 
 
-async def _health(request: Request) -> list[dict[str, Any]]:
-    """Pipeline liveness, from the projector's own watermark.
+async def _health(request: Request, tenants_seen: list[str]) -> list[dict[str, Any]]:
+    """Pipeline liveness, read as *evidence of work* for the bound tenants.
 
     A missing service fails silently — the stack stays green and stops doing
-    work — so the strip reads *evidence of work* rather than process presence.
+    work — so this looks for the traces work leaves rather than for processes.
+
+    **Bound per tenant, deliberately.** The first version ran in a
+    `system_transaction` with no tenant set, so row-level security hid every
+    row and it read `0 unprocessed` as a healthy projector and `0 decisions` as
+    a dead planner. The strip whose whole job is to catch silence was reading
+    silence as health.
     """
     engine = _engine(request)
-    async with system_transaction(engine) as conn:
-        row = (
-            await conn.execute(
-                text(
-                    "SELECT (SELECT count(*) FROM events_raw WHERE processed_at IS NULL) AS lag,"
-                    "       (SELECT count(*) FROM scheduled_actions WHERE state = 'pending')"
-                    "         AS queued,"
-                    "       (SELECT count(*) FROM decisions) AS decisions"
+    lag = queued = decided = 0
+    for tenant_id in tenants_seen:
+        async with tenant_transaction(engine, tenant_id) as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT (SELECT count(*) FROM events_raw"
+                        "         WHERE processed_at IS NULL) AS lag,"
+                        "       (SELECT count(*) FROM scheduled_actions"
+                        "         WHERE state = 'pending') AS queued,"
+                        "       (SELECT count(*) FROM decisions) AS decided"
+                    )
                 )
-            )
-        ).one()
+            ).one()
+        lag += int(row.lag)
+        queued += int(row.queued)
+        decided += int(row.decided)
+
     return [
         {"service": "api", "up": True},
-        {"service": "projector", "up": int(row.lag) == 0},
-        {"service": "planner", "up": int(row.queued) > 0 or int(row.decisions) > 0},
-        {"service": "executor", "up": int(row.decisions) > 0},
+        # A backlog means events are arriving and nothing is folding them.
+        {"service": "projector", "up": lag == 0},
+        # Something must have decided: a queue to fire, or a ledger of firings.
+        {"service": "planner", "up": queued > 0 or decided > 0},
+        {"service": "executor", "up": decided > 0},
     ]
 
 
@@ -519,3 +547,80 @@ async def events_stream(
         ],
         "polled_at": datetime.now(UTC).isoformat(),
     }
+
+
+# ── screens ─────────────────────────────────────────────────────────────────
+
+
+def _guard_label(key: str) -> str:
+    return {
+        "compliance_violations": "Compliance violations",
+        "revocation_vs_control": "Revocation vs control",
+        "optout_vs_control": "Opt-out vs control",
+        "net_value_paise": "Net value",
+    }.get(key, key.replace("_", " ").capitalize())
+
+
+def _guard_value(guard: dict[str, Any]) -> str:
+    from prayas.console.format import pct, rupees
+
+    key, value = str(guard["key"]), guard["value"]
+    if key == "net_value_paise":
+        return rupees(value)
+    if key.endswith("_vs_control"):
+        return pct(float(value) * 100, digits=2, signed=True) + " pts"
+    return f"{value:,}"
+
+
+def _rail_label(rail: str) -> str:
+    return {
+        "upi_autopay": "UPI Autopay",
+        "card_emandate": "Card e-mandate",
+        "enach": "eNACH",
+    }.get(rail, rail)
+
+
+@pages.get("/portfolio", response_class=HTMLResponse)
+async def portfolio_screen(
+    request: Request,
+    who: Annotated[Principal, Depends(principal)],
+    tenant: Annotated[str | None, Query()] = None,
+) -> HTMLResponse:
+    """**Screen 1.** The matched pair, efficiency, guardrails, rails, live.
+
+    Renders the same payloads `/v1/portfolio/summary` returns — the screen has
+    no second source of truth, so a number on the page and a number in the API
+    cannot drift apart.
+    """
+    from prayas.console.format import ist, lakh, pct, rupees
+
+    summary = await portfolio_summary(request, who, tenant=tenant, window="30d")
+    fleet = await tenants(request, who)
+    stream = await events_stream(request, who)
+    name = next((t["name"] for t in fleet if t["tenant_id"] == who.tenant_id), who.tenant_id)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="portfolio.html",
+        context={
+            "screen": "portfolio",
+            "tenant": tenant or who.tenant_id,
+            "tenant_name": name,
+            "tenants": fleet,
+            "stage": summary["stage"],
+            "window": summary["window"],
+            "pair": summary["matched_pair"],
+            "eff": summary["efficiency"],
+            "guardrails": summary["guardrails"],
+            "rails": summary["rails"],
+            "health": summary["health"],
+            "events": stream["events"],
+            "rupees": rupees,
+            "lakh": lakh,
+            "pct": pct,
+            "ist": ist,
+            "guard_label": _guard_label,
+            "guard_value": _guard_value,
+            "rail_label": _rail_label,
+        },
+    )

@@ -1,0 +1,175 @@
+/* PRAYAS demo surface — Demo spec §R1.
+ *
+ * It should read as a tab that already exists inside the payments dashboard:
+ * deep navy rail, white data surfaces, one accent, dense high-contrast tables.
+ * Not a clone of anyone's marketing site — that reads as a mockup rather than
+ * a product.
+ *
+ * No CDN, no build step, no network (N3). Everything here is hand-written.
+ */
+
+:root {
+  /* Surfaces */
+  --nav:        #012652;   /* Prussian blue — sidebar, tooltips */
+  --nav-hover:  #0A3A6E;
+  --canvas:     #F7F9FC;
+  --surface:    #FFFFFF;
+  --line:       #E3E8EF;
+
+  /* Accent — exactly one */
+  --accent:     #0D94FB;
+  --accent-sub: #E8F4FE;
+
+  /* Text */
+  --ink:        #14213D;
+  --ink-2:      #5A6B87;
+  --ink-3:      #8A99B3;
+
+  /* Semantic */
+  --ok:   #147D50;  --ok-bg:   #E6F4EE;
+  --warn: #B05E00;  --warn-bg: #FCF1E3;
+  --deny: #C0392B;  --deny-bg: #FBEAE8;
+  --held: #5A6B87;  --held-bg: #EEF1F6;   /* holdout — deliberately grey */
+
+  /* Elevation */
+  --e1: 0 1px 2px rgba(1,38,82,.06);
+  --e2: 0 2px 8px rgba(1,38,82,.08);
+  --e3: 0 8px 24px rgba(1,38,82,.12);
+
+  --r: 6px;   /* tight radius: financial UI, not consumer */
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font: 400 14px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Figures that change width while a ticker updates look broken. */
+.num, td.num, .metric-value, .pair-value, table td, table th { font-variant-numeric: tabular-nums; }
+
+/* ── shell ──────────────────────────────────────────────────────────────── */
+
+.app { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+
+.rail {
+  background: var(--nav); color: #fff; padding: 18px 0 24px;
+  display: flex; flex-direction: column; gap: 22px;
+}
+.rail .brand { padding: 0 20px; font-size: 15px; font-weight: 600; letter-spacing: .04em; }
+.rail .brand span { display: block; font-size: 11px; font-weight: 400; color: #7FA8D4; letter-spacing: .02em; margin-top: 2px; }
+.rail nav { display: flex; flex-direction: column; }
+.rail nav a {
+  color: #C8DAF0; text-decoration: none; padding: 8px 20px; font-size: 13.5px;
+  border-left: 3px solid transparent;
+}
+.rail nav a:hover { background: var(--nav-hover); color: #fff; }
+.rail nav a.on { background: var(--nav-hover); color: #fff; border-left-color: var(--accent); font-weight: 500; }
+
+.rail .group { padding: 0 20px; font-size: 10.5px; letter-spacing: .1em; color: #6F97C4; text-transform: uppercase; }
+.rail .tenants { display: flex; flex-direction: column; margin-top: 6px; }
+.rail .tenants a { display: flex; justify-content: space-between; align-items: baseline; }
+.rail .tenants a small { color: #6F97C4; font-size: 11px; }
+
+.main { min-width: 0; display: flex; flex-direction: column; }
+
+.topbar {
+  background: var(--surface); border-bottom: 1px solid var(--line);
+  padding: 14px 26px 0; position: sticky; top: 0; z-index: 5;
+}
+.topbar h1 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -.01em; }
+.topbar .sub { color: var(--ink-2); font-size: 13px; margin: 2px 0 12px; }
+
+/* ── health strip ───────────────────────────────────────────────────────── */
+
+.health { display: flex; gap: 16px; padding: 0 0 12px; font-size: 12.5px; color: var(--ink-2); }
+.health span { display: inline-flex; align-items: center; gap: 6px; }
+.health i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); display: inline-block; }
+.health .down i { background: var(--deny); }
+.health .down { color: var(--deny); font-weight: 600; }
+
+/* ── layout ─────────────────────────────────────────────────────────────── */
+
+.page { padding: 20px 26px 40px; display: flex; flex-direction: column; gap: 18px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--e1); }
+.card > h2 {
+  margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line);
+  font-size: 15px; font-weight: 600;
+}
+.card .body { padding: 16px; }
+
+/* ── the matched pair: one card, one border (N4) ────────────────────────── */
+
+.pair { border: 1.5px solid var(--accent); border-radius: var(--r); background: var(--surface); box-shadow: var(--e2); }
+.pair > h2 { border-bottom: 1px solid var(--accent-sub); background: var(--accent-sub); color: var(--ink); }
+.pair .halves { display: grid; grid-template-columns: 1fr 1fr; }
+.pair .half { padding: 18px 20px; }
+.pair .half + .half { border-left: 1px solid var(--line); }
+.pair-label { font-size: 13px; font-weight: 500; color: var(--ink-2); }
+.pair-value { font-size: 40px; font-weight: 600; letter-spacing: -.02em; margin: 4px 0 2px; }
+.pair-ci { font-size: 13px; color: var(--ink-2); }
+.pair-note { font-size: 12.5px; color: var(--ink-3); margin-top: 6px; }
+
+/* ── metric row ─────────────────────────────────────────────────────────── */
+
+.metrics { display: grid; grid-template-columns: repeat(5, 1fr); }
+.metric { padding: 14px 16px; }
+.metric + .metric { border-left: 1px solid var(--line); }
+.metric-label { font-size: 13px; font-weight: 500; color: var(--ink-2); }
+.metric-value { font-size: 26px; font-weight: 600; letter-spacing: -.01em; margin: 3px 0 1px; }
+.metric-base { font-size: 12.5px; color: var(--ink-3); }
+.metric-value.none { color: var(--ink-3); font-size: 20px; }
+
+/* ── tables ─────────────────────────────────────────────────────────────── */
+
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+th { font-size: 12px; color: var(--ink-2); font-weight: 600; background: #FAFBFD; }
+tr:last-child td { border-bottom: 0; }
+td.right, th.right { text-align: right; }
+
+/* ── chips and status ───────────────────────────────────────────────────── */
+
+.chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+.chip.ok   { background: var(--ok-bg);   color: var(--ok); }
+.chip.warn { background: var(--warn-bg); color: var(--warn); }
+.chip.deny { background: var(--deny-bg); color: var(--deny); }
+/* The control arm is deliberately untouched, never failed. A warning colour
+   would undo the argument the holdout exists to make. */
+.chip.held { background: var(--held-bg); color: var(--held); }
+.chip.stage { background: var(--accent-sub); color: #06598F; }
+
+.guard { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.guard:last-child { border-bottom: 0; }
+.guard .mark { width: 16px; }
+.guard .key { flex: 1; }
+.guard .val { font-weight: 600; font-variant-numeric: tabular-nums; }
+.guard .thr { color: var(--ink-3); font-size: 12.5px; width: 150px; text-align: right; }
+
+/* ── two-column bottom row ──────────────────────────────────────────────── */
+
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+
+.rails li { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.rails { list-style: none; margin: 0; padding: 0 16px; }
+.rails li:last-child { border-bottom: 0; }
+.rails b { font-variant-numeric: tabular-nums; }
+
+.ticker { list-style: none; margin: 0; padding: 0; max-height: 190px; overflow-y: auto; }
+.ticker li { display: flex; gap: 10px; padding: 6px 16px; font-size: 13px; border-bottom: 1px solid var(--line); }
+.ticker li:last-child { border-bottom: 0; }
+.ticker .t { color: var(--ink-3); font-variant-numeric: tabular-nums; width: 74px; }
+.ticker .k { flex: 1; color: var(--ink-2); }
+
+.empty { padding: 18px 16px; color: var(--ink-3); font-size: 13.5px; }
+.foot { color: var(--ink-3); font-size: 12.5px; }
+
+@media (max-width: 1500px) {
+  .metrics { grid-template-columns: repeat(3, 1fr); }
+  .metric:nth-child(3n+1) { border-left: 0; }
+}

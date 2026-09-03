@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}PRAYAS{% endblock %}</title>
+<link rel="stylesheet" href="/console/static/app.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="rail">
+    <div class="brand">PRAYAS<span>recovery engine</span></div>
+
+    <nav>
+      <a href="/console/portfolio?tenant={{ tenant }}" class="{{ 'on' if screen == 'portfolio' }}">Portfolio</a>
+      <a href="/console/ledger?tenant={{ tenant }}" class="{{ 'on' if screen == 'ledger' }}">Ledger</a>
+    </nav>
+
+    <div>
+      <div class="group">Tenants</div>
+      <div class="tenants">
+        {# The switcher changes the whole page. This *is* the multi-tenancy
+           proof — a separate screen for it would prove less. #}
+        <a href="/console/portfolio?tenant=all" class="{{ 'on' if tenant == 'all' }}">All tenants</a>
+        {% for t in tenants %}
+        <a href="/console/portfolio?tenant={{ t.tenant_id }}"
+           class="{{ 'on' if tenant == t.tenant_id }}">
+          {{ t.name }}<small>{{ t.stage }}</small>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <h1>{% block heading %}{% endblock %}</h1>
+      <p class="sub">{% block subheading %}{% endblock %}</p>
+
+      {# A missing service fails silently — the stack stays green and stops
+         doing work — so this reads evidence of work, not process presence. #}
+      <div class="health">
+        {% for s in health %}
+        <span class="{{ '' if s.up else 'down' }}"><i></i>{{ s.service }}</span>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="page">{% block body %}{% endblock %}</div>
+  </div>
+
+</div>
+<script src="/console/static/app.js"></script>
+</body>
+</html>

@@ -1569,6 +1569,30 @@ Arm membership comes from `cohort.arm_for`, the hash the planner consults, so th
 
 **Two more found in the same aggregate.** Fleet rail mix averaged per-tenant *shares*, reporting 33/33/33 for three single-rail tenants of 6,120, 4,880 and 1,200 — now weighted by mandates (50/40/10). And a summed guardrail inherited a component tenant's status, so a **positive** fleet net value of ₹567,342 was reported as a breach; summed metrics now recompute their verdict from the sum.
 
+### ADR-105 · 2026-09-03 · The portfolio screen, and the two rules that are structural
+**Decision:** `console/format.py`, `static/app.css`, `templates/{base,portfolio}.html`, and `/console/portfolio` (Demo spec §R4.1).
+
+Server-rendered Jinja, hand-written CSS, ~40 lines of vanilla JS. No CDN, no npm, no build step (N3): the demo runs on `localhost` with the network off, so nothing on these screens may depend on a request leaving the machine — and a test asserts the document head reaches no external origin.
+
+**Two of this screen's rules are structural rather than stylistic, so both are asserted rather than trusted to a convention.**
+
+*Recovery may never appear without survival.* They live in one bordered card, and `test_recovery_never_renders_without_survival` parses the rendered HTML and fails if survival leaves that container. §6's point is that a dunning system can raise recovery while destroying the book; a layout that permits showing one alone will eventually show one alone.
+
+*The holdout is never coloured as a failure.* It carries `--held` grey, and a test asserts the class. Red or amber would read as a fault and undo the argument the control arm exists to make.
+
+**Money is formatted once, at the edge, and never becomes a float.** Indian grouping — ₹18,42,300, last three digits then pairs — because `₹1,842,300` reads as a mistake to this audience and the groups carry lakh and crore. `rupees()` returns a string with no path back to a number.
+
+**A figure with no baseline is not evidence**, so every efficiency metric renders the holdout's value for the same quantity beside it, and the two that cannot be measured say *not measured* with the reason.
+
+### FINDING-P17-16 · 2026-09-03 · ✅ RESOLVED — three ways the screen reported silence as health
+**a) The health strip read RLS silence as a healthy pipeline.** `_health` ran in a `system_transaction` with no tenant bound, so row-level security hid every row: it saw `0 unprocessed` and called the projector up, and `0 decisions` and called the planner and executor down. With the projector genuinely stopped and a backlog of one, the strip stayed green.
+
+The strip exists precisely because a missing service fails *silently* — the stack stays green and stops doing work. It was the same failure one level up. Now bound per tenant, and verified by stopping the projector: one red entry, recovering to zero on restart.
+
+**b) An empty arm manufactured a +100 point lift.** CANARY treats 1% of a 1,200-mandate tenant, which left a holdout of **zero**. A rate over an empty arm is 0.0, so `treatment − holdout` came out at a clean +100 points, and the fleet merge averaged it into +33.3 — while the tenant that could actually support the comparison showed +0.0. Point estimates are now suppressed alongside their intervals below a 30-mandate floor, and the merge averages only the tenants that could be measured.
+
+**c) The seeded churn was silently rejected.** `subscription.cancelled` was emitted on `ACTIVE` mandates, but §11's machine has no such edge — a mandate goes `ACTIVE → AT_RISK → REVOKED`. The projector counted `stale_transition{illegal_transition}` and moved on, so 541 cancellation events produced **zero** revocations and survival sat flat at 0.0 through several runs. The seeder now emits `subscription.halted` first, which is both what the machine allows and what Razorpay actually does after repeated failures. 528 mandates now revoke, and fitfirst's survival lift reads **+1.86 pts with a 95% CI of [−0.46, +4.17]** — an interval that *includes* zero, and is reported as such rather than as an effect.
+
 ## Spec errata found (documentation only, no code impact)
 
 - **§4 (line 193) cites "§21.4" for reply parsing residency.** §21 is the liquidity hazard model and has no subsections; the content is in **§41.3**. Found in Phase 13.

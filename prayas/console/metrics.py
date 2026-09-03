@@ -37,6 +37,10 @@ from prayas.adoption.store import current_stage
 #: 95% two-sided.
 Z = 1.959963985
 
+#: Below this an arm cannot support a comparison at all — not a weaker claim,
+#: a meaningless one.
+MIN_ARM = 30
+
 
 @dataclass(frozen=True, slots=True)
 class ArmStats:
@@ -150,8 +154,18 @@ def matched_pair(split: dict[Arm, ArmStats]) -> dict[str, Any]:
     avg_ticket = treat.recovered_paise / treat.recovered_cycles if treat.recovered_cycles else 0
     incremental = int(lift * treat.failed_cycles * avg_ticket)
 
-    survival_lift = treat.survival_rate - hold.survival_rate
-    survival_ci = _diff_ci(treat.survival_rate, treat.mandates, hold.survival_rate, hold.mandates)
+    # An arm this thin cannot support a comparison. CANARY treats 1% of a
+    # 1,200-mandate tenant, which left a holdout of *zero* — and a rate over an
+    # empty arm is 0.0, so the "lift" came out at a clean +100 points and then
+    # contaminated the fleet average through the merge. The point estimate is
+    # suppressed alongside its interval rather than shown without one.
+    comparable = treat.mandates >= MIN_ARM and hold.mandates >= MIN_ARM
+    survival_lift = treat.survival_rate - hold.survival_rate if comparable else None
+    survival_ci = (
+        _diff_ci(treat.survival_rate, treat.mandates, hold.survival_rate, hold.mandates)
+        if comparable
+        else None
+    )
 
     return {
         "incremental_recovery_paise": incremental,
@@ -163,7 +177,9 @@ def matched_pair(split: dict[Arm, ArmStats]) -> dict[str, Any]:
             if ci
             else None
         ),
-        "incremental_survival_pts": round(survival_lift * 100, 2),
+        "incremental_survival_pts": (
+            round(survival_lift * 100, 2) if survival_lift is not None else None
+        ),
         "incremental_survival_ci": (
             [round(survival_ci[0] * 100, 2), round(survival_ci[1] * 100, 2)]
             if survival_ci

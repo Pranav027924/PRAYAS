@@ -37,6 +37,20 @@ step "Lint"            uv run ruff check .
 step "Format check"    uv run ruff format --check .
 step "Type check"      uv run mypy --strict prayas tests
 step "Apply migrations" uv run alembic upgrade head
+# The executor's crash tests spawn a real worker and SIGKILL it. A running
+# `executor` container claims the same rows through FOR UPDATE SKIP LOCKED —
+# correct production behaviour, and a false CI failure that has cost several
+# debugging rounds. Stopped for the run, restored afterwards.
+WORKERS_WERE_UP=""
+if command -v docker >/dev/null 2>&1 && docker compose ps --services --filter status=running 2>/dev/null | grep -q executor; then
+  WORKERS_WERE_UP="yes"
+  docker compose stop executor planner projector chain-verifier >/dev/null 2>&1 || true
+fi
+restore_workers() {
+  [ -n "$WORKERS_WERE_UP" ] && docker compose up -d executor planner projector chain-verifier >/dev/null 2>&1 || true
+}
+trap restore_workers EXIT
+
 step "Tests with coverage floor" uv run pytest --cov --cov-report=term-missing
 
 # ADR-091. The published pack has its own suite, and it must pass without the

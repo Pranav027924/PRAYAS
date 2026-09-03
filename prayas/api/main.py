@@ -10,16 +10,19 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from prayas.api.webhooks import router as webhooks_router
 from prayas.config import Settings
 from prayas.console.api import router as console_router
+from prayas.console.routes import pages as demo_pages
 from prayas.console.routes import router as demo_router
 from prayas.db.engine import create_app_engine
 from prayas.observability.logging import configure
@@ -47,6 +50,15 @@ app = FastAPI(title="Prayas", version="0.0.0", lifespan=lifespan)
 app.include_router(webhooks_router)
 app.include_router(console_router)
 app.include_router(demo_router)
+app.include_router(demo_pages)
+
+# Vendored, never a CDN (N3): the demo runs on localhost with the network off,
+# so nothing on these screens may depend on a request leaving the machine.
+app.mount(
+    "/console/static",
+    StaticFiles(directory=str(Path(__file__).resolve().parent.parent / "console" / "static")),
+    name="console-static",
+)
 
 
 @app.get("/health")

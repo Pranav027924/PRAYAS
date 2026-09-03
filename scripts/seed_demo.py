@@ -480,6 +480,21 @@ def _events_for_mandate(
     else:
         rate = REVOCATION_HOLDOUT
     if rng.random() < rate:
+        # `ACTIVE -> REVOKED` is not a legal transition: §11's machine puts a
+        # mandate AT_RISK first, and the projector correctly rejected a bare
+        # cancellation as illegal — silently, which is why the survival number
+        # sat at zero through several seeding runs. Razorpay halts a
+        # subscription after repeated failures before it is cancelled, so the
+        # pair is what really happens as well as what the machine allows.
+        halted_at = now - timedelta(days=rng.randint(9, 20))
+        out.append(
+            {
+                "_id": f"{mandate_id}_halt",
+                "event": "subscription.halted",
+                "payload": {"subscription": sub},
+                "created_at": int(halted_at.timestamp()),
+            }
+        )
         out.append(
             {
                 "_id": f"{mandate_id}_cancel",
