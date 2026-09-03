@@ -914,7 +914,19 @@ def main() -> int:
         f"  rejected {stats.failed_posts:,}"
     )
     _say(f"  ingest took {elapsed:.0f}s")
-    return 1 if stats.failed_posts else 0
+
+    # `scripts/seed-demo.sh` runs under `set -e`, so a non-zero exit here
+    # aborts the whole reseed before drain/plan/settle ever run — a stray
+    # dropped connection among tens of thousands of concurrent posts would
+    # silently leave the fleet half-seeded (onboarded, but never decided or
+    # fired). A systemic problem — a wrong secret, a dead API — fails nearly
+    # everything, not roughly one in fifty thousand, so a small-percentage
+    # tolerance tells the two apart without masking a real failure.
+    tolerance = max(5, stats.events // 200)
+    if stats.failed_posts > tolerance:
+        _say(f"  ABORTING: {stats.failed_posts} failed posts exceeds the {tolerance} tolerance")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
