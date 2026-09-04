@@ -17,6 +17,7 @@ wrong order on a system where reading is the thing being controlled.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import parse_qs
@@ -46,6 +47,14 @@ from prayas.measure.replay import ReplayError
 
 router = APIRouter(prefix="/console", tags=["console"])
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+#: Cache-buster for the stylesheet, derived from its own bytes. A browser
+#: holding a stale `app.css` shows an old design over new markup and reads as
+#: "nothing changed" — which is exactly what happened once, and cost a round
+#: of debugging that had nothing to do with the code.
+_CSS = Path(__file__).parent / "static" / "app.css"
+ASSET_V = hashlib.sha256(_CSS.read_bytes()).hexdigest()[:10] if _CSS.exists() else "dev"
+templates.env.globals["asset_v"] = ASSET_V
 
 
 #: Name of the cookie carrying the console token.

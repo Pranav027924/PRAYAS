@@ -4,13 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}PRAYAS{% endblock %}</title>
-<link rel="stylesheet" href="/console/static/app.css">
+<link rel="stylesheet" href="/console/static/app.css?v={{ asset_v }}">
 </head>
 <body>
 <div class="app">
 
   <aside class="rail">
     <div class="brand">PRAYAS<span>recovery engine</span></div>
+    <p class="tagline">A failed payment isn't a failed customer.<br>Try smarter, not harder.</p>
 
     <nav>
       <a href="/console/portfolio?tenant={{ tenant }}{{ window_q }}" class="{{ 'on' if screen == 'portfolio' }}">Portfolio</a>

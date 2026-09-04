@@ -20,11 +20,14 @@ from prayas.console.format import IST
 
 #: Drawing box. Wide enough that a 3-day episode still separates its markers.
 WIDTH = 980
-HEIGHT = 132
+#: Tall enough for three staggered label rows above the bands. At 132 the
+#: rows were 9px apart against a 10.5px font, so two markers minutes apart
+#: printed their timestamps on top of each other.
+HEIGHT = 156
 PAD_L = 16
 PAD_R = 16
-AXIS_Y = 92
-BAND_TOP = 30
+AXIS_Y = 112
+BAND_TOP = 50
 BAND_H = 34
 
 

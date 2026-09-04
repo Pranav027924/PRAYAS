@@ -1,28 +1,351 @@
-{% extends "_base.html" %}
-{% block title %}Sign in — PRAYAS{% endblock %}
-{% block body %}
-<h2>Sign in</h2>
-<div class="panel" style="padding:1.1rem">
-  <p style="margin-top:0">
-    Paste a console token. There is no username and password: this system has no
-    user store, and adding one here would put a second, weaker path to the same
-    data beside the signed one.
-  </p>
-  {% if request.query_params.get('error') %}
-    <p class="deny">That token did not verify. It may be expired, or signed with
-    a different secret.</p>
-  {% endif %}
-  <form method="post" action="/console/login">
-    <textarea name="token" rows="4" required autofocus
-      style="width:100%;font:12px ui-monospace,monospace;padding:.6rem;
-             border:1px solid var(--line);border-radius:8px;
-             background:var(--bg);color:var(--ink)"
-      placeholder="eyJleHAiOi..."></textarea>
-    <p><button type="submit">Open console</button></p>
-  </form>
-  <p class="chip">
-    <code>./scripts/demo.sh</code> prints a token. Or mint one:
-    <code>issue(tenant, "merchant_ops")</code> from <code>prayas.console.auth</code>.
-  </p>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Get started — PRAYAS</title>
+<style>
+/* The auth screen carries its own styles rather than the console's.
+ * It shares the console's language — the brand plate's blue, white surfaces,
+ * one indigo action — but keeps its own copy, because the front door is a
+ * single full-bleed layout and inheriting a dashboard grid to override it
+ * costs more than it saves. */
+
+:root {
+  --blue:     #033B93;   /* sampled from the brand plate */
+  --indigo:   #3B3AD6;   /* the primary action */
+  --indigo-2: #2E2DB8;
+  --paper:    #FEFEFE;
+  --ink:      #010216;
+  --ink-2:    #5B6272;
+  --ink-3:    #8B92A3;
+  --line:     #E3E6ED;
+  --deny:     #C0392B;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 15px/1.55 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.auth { display: grid; grid-template-columns: 1fr 1fr; min-height: 100vh; padding: 14px; }
+
+/* ── left: the brand plate ────────────────────────────────────────────── */
+
+.plate {
+  position: relative;
+  overflow: hidden;
+  border-radius: 26px;
+  background: var(--blue);
+  display: flex; flex-direction: column; justify-content: center;
+  padding: 0 6%;
+}
+
+/* Rings, grid and the one sparkle, drawn rather than imported so they scale
+   with the panel and cost no request. */
+.plate svg.deco { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+.plate .mark {
+  position: relative; z-index: 1; margin: 0;
+  font-size: clamp(56px, 8.4vw, 132px);
+  font-weight: 800; letter-spacing: -.035em; line-height: .9;
+  color: #FFFFFF;
+}
+.plate .said {
+  position: relative; z-index: 1; margin: 26px 0 0;
+  font-size: clamp(14px, 1.5vw, 23px);
+  font-style: italic; color: rgba(255,255,255,.93);
+}
+.plate .lines {
+  position: relative; z-index: 1;
+  margin: 44px 0 0; padding-top: 26px;
+  border-top: 1px solid rgba(255,255,255,.22);
+}
+.plate .lines p { margin: 0 0 7px; font-size: 15.5px; font-weight: 600; color: #fff; }
+.plate .lines p + p { color: rgba(255,255,255,.66); font-weight: 500; }
+
+/* ── right: the form ──────────────────────────────────────────────────── */
+
+.panel { display: flex; align-items: center; justify-content: center; padding: 40px 6%; }
+.form { width: 100%; max-width: 430px; }
+
+.form h1 {
+  margin: 0 0 8px;
+  font-size: clamp(30px, 3.2vw, 43px);
+  font-weight: 600; letter-spacing: -.025em; line-height: 1.1;
+}
+.form .lede { margin: 0 0 30px; font-size: 15px; color: var(--ink-2); }
+
+.field { margin-bottom: 17px; }
+.field .row { display: flex; align-items: baseline; justify-content: space-between; }
+.field label { display: block; margin-bottom: 7px; font-size: 14px; font-weight: 600; }
+.field .aside { font-size: 13.5px; font-weight: 500; color: var(--indigo); }
+
+.field .wrap { position: relative; }
+.field input, .field textarea {
+  width: 100%;
+  padding: 13px 15px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit; font-size: 14.5px;
+  transition: border-color .15s, box-shadow .15s;
+}
+.field textarea {
+  font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical; min-height: 92px;
+}
+.field input::placeholder, .field textarea::placeholder { color: var(--ink-3); }
+.field input:focus, .field textarea:focus {
+  outline: none; border-color: var(--indigo);
+  box-shadow: 0 0 0 3px rgba(59,58,214,.13);
+}
+.field .eye {
+  position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+  color: var(--ink-3); display: flex;
+}
+
+.agree { display: flex; align-items: center; gap: 10px; margin: 20px 0; font-size: 14px; color: var(--ink-2); }
+.agree input { width: 18px; height: 18px; accent-color: var(--indigo); }
+.agree a { color: var(--indigo); font-weight: 500; }
+
+.btn {
+  width: 100%;
+  padding: 14px 18px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  font: inherit; font-size: 15px; font-weight: 600;
+  cursor: pointer;
+  transition: filter .15s, border-color .15s;
+}
+.btn-primary {
+  color: #fff;
+  background: linear-gradient(180deg, var(--indigo), var(--indigo-2));
+  box-shadow: 0 6px 18px rgba(59,58,214,.28);
+}
+.btn-primary:hover { filter: brightness(1.07); }
+
+.btn-outline {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  background: #fff; color: var(--ink); border-color: var(--line);
+  font-size: 14.5px; font-weight: 500;
+}
+.btn-outline:hover { border-color: var(--ink-3); }
+.btn-outline b { font-weight: 700; }
+
+.tiny { margin: 15px 0 0; text-align: center; font-size: 14px; color: var(--ink-2); }
+.tiny a { color: var(--indigo); font-weight: 600; text-decoration: none; }
+
+.or { display: flex; align-items: center; gap: 16px; margin: 24px 0; font-size: 14px; color: var(--ink-3); }
+.or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+.sso { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+
+/* Everything above the demo panel is decorative: there is no user store
+   behind it. It keeps full visual weight — a greyed-out primary action reads
+   as a broken page rather than a deliberate one — and clicking it points at
+   the path that does work instead of doing nothing. */
+.off input, input.off { background: #fff; }
+.nudge {
+  margin: 12px 0 0; padding: 10px 13px;
+  border: 1px solid rgba(59,58,214,.28);
+  border-radius: 9px;
+  background: rgba(59,58,214,.06);
+  color: var(--indigo);
+  font-size: 13.5px; font-weight: 500;
+}
+.nudge[hidden] { display: none; }
+
+/* The demo panel, when pointed at. */
+@keyframes flash {
+  0%   { box-shadow: 0 0 0 0 rgba(59,58,214,.34); }
+  100% { box-shadow: 0 0 0 14px rgba(59,58,214,0); }
+}
+.demo.lit { animation: flash .9s ease-out 2; }
+
+.demo {
+  margin-top: 28px; padding: 20px;
+  border: 1px solid rgba(59,58,214,.30);
+  border-radius: 13px;
+  background: linear-gradient(180deg, rgba(59,58,214,.055), rgba(59,58,214,.012));
+}
+.demo h2 { margin: 0 0 5px; font-size: 16px; font-weight: 650; }
+.demo p  { margin: 0 0 15px; font-size: 13.5px; color: var(--ink-2); line-height: 1.5; }
+
+.err {
+  margin-bottom: 20px; padding: 12px 15px;
+  border: 1px solid rgba(192,57,43,.32);
+  border-radius: 9px; background: rgba(192,57,43,.07);
+  color: var(--deny); font-size: 14px;
+}
+
+.note { margin: 22px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--ink-3); }
+.note code {
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: #F2F4F8; padding: 1.5px 6px; border-radius: 5px; color: var(--ink-2);
+}
+
+@media (max-width: 940px) {
+  .auth { grid-template-columns: 1fr; padding: 0; }
+  .plate { border-radius: 0; min-height: 300px; padding: 46px 30px; }
+  .panel { padding: 40px 26px; }
+}
+</style>
+</head>
+<body>
+<div class="auth">
+
+  <aside class="plate">
+    <svg class="deco" viewBox="0 0 800 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs>
+        <pattern id="g" width="52" height="52" patternUnits="userSpaceOnUse">
+          <path d="M52 0H0V52" fill="none" stroke="rgba(255,255,255,.055)" stroke-width="1"/>
+        </pattern>
+      </defs>
+      <rect width="800" height="900" fill="url(#g)"/>
+      <g fill="none" stroke="rgba(255,255,255,.10)">
+        <circle cx="400" cy="450" r="250"/>
+        <circle cx="400" cy="450" r="360"/>
+        <circle cx="400" cy="450" r="470"/>
+      </g>
+      <circle cx="150" cy="250" r="7" fill="#4D93FF"/>
+      <circle cx="120" cy="760" r="6" fill="#4D93FF"/>
+      <path d="M690 120 L699 148 L727 157 L699 166 L690 194 L681 166 L653 157 L681 148 Z"
+            fill="#4D93FF"/>
+    </svg>
+
+    <h1 class="mark">PRAYAS</h1>
+    <p class="said">Making every recurring payment attempt count.</p>
+    <div class="lines">
+      <p>A failed payment isn't a failed customer.</p>
+      <p>Try smarter, not harder.</p>
+    </div>
+  </aside>
+
+  <main class="panel">
+    <div class="form">
+      <h1>Get Started Now</h1>
+      <p class="lede">Please log in to your account to continue.</p>
+
+      {% if request.query_params.get('error') %}
+        <div class="err">
+          That token did not verify. It may be expired, or signed with a
+          different secret.
+        </div>
+      {% endif %}
+
+      <div class="field">
+        <label for="name">Name</label>
+        <input id="name" type="text" class="off" placeholder="Enter your name ..." readonly autocomplete="off">
+      </div>
+
+      <div class="field">
+        <label for="email">Email address</label>
+        <input id="email" type="email" class="off" placeholder="workmail@gmail.com" readonly autocomplete="off">
+      </div>
+
+      <div class="field">
+        <div class="row">
+          <label for="password">Password</label>
+          <span class="aside">Forgot Password?</span>
+        </div>
+        <div class="wrap">
+          <input id="password" type="password" class="off" placeholder="••••••••••••" readonly autocomplete="off">
+          <span class="eye" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="1.7">
+              <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </span>
+        </div>
+      </div>
+
+      <label class="agree">
+        <input type="checkbox" class="off">
+        <span>I agree to the <a href="#" onclick="return false">Terms &amp; Privacy</a></span>
+      </label>
+
+      <button type="button" class="btn btn-primary" data-nudge>Log In</button>
+      <p class="tiny">Have an account? <a href="#" data-nudge-link>Sign up</a></p>
+      <p class="nudge" id="nudge" hidden role="status">
+        Sign-in isn't wired up in this build — use <b>Experience the demo</b> below.
+      </p>
+
+      <div class="or">Or</div>
+
+      <div class="sso">
+        <button type="button" class="btn btn-outline" data-nudge>
+          <svg width="19" height="19" viewBox="0 0 48 48" aria-hidden="true">
+            <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.8 6.1C12.3 13.2 17.7 9.5 24 9.5Z"/>
+            <path fill="#4285F4" d="M46.1 24.6c0-1.6-.1-3.1-.4-4.6H24v9.1h12.4c-.5 2.9-2.2 5.4-4.6 7.1l7.6 5.9c4.4-4.1 6.7-10.1 6.7-17.5Z"/>
+            <path fill="#FBBC05" d="M10.4 28.7a14.6 14.6 0 0 1 0-9.4l-7.8-6.1a24 24 0 0 0 0 21.6l7.8-6.1Z"/>
+            <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.8 2.3-8.3 2.3-6.3 0-11.7-3.7-13.6-9.9l-7.8 6.1C6.5 42.6 14.6 48 24 48Z"/>
+          </svg>
+          Login with <b>Google</b>
+        </button>
+        <button type="button" class="btn btn-outline" data-nudge>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M16.4 12.8c0-2.4 2-3.6 2.1-3.6-1.1-1.7-2.9-1.9-3.6-1.9-1.5-.2-3 .9-3.8.9s-2-.9-3.3-.9c-1.7 0-3.2 1-4.1 2.5-1.7 3-.4 7.5 1.3 10 .8 1.2 1.8 2.5 3.1 2.5 1.2 0 1.7-.8 3.2-.8s1.9.8 3.2.8 2.2-1.2 3-2.4c.9-1.4 1.3-2.7 1.3-2.8-.1 0-2.4-1-2.4-3.7ZM14 4.9c.7-.8 1.1-2 1-3.2-1 0-2.2.7-2.9 1.5-.6.7-1.2 1.9-1 3.1 1.1.1 2.2-.6 2.9-1.4Z"/>
+          </svg>
+          Login with <b>Apple</b>
+        </button>
+      </div>
+
+      {# ── the one path that works ───────────────────────────────────── #}
+      <form method="post" action="/console/login" class="demo">
+        <h2>Experience the demo</h2>
+        <p>Paste a console token to open the live fleet.</p>
+        <div class="field">
+          <textarea name="token" required autofocus spellcheck="false"
+                    placeholder="eyJleHAiOi..."></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary">Enter console</button>
+      </form>
+
+      <p class="note">
+        Sign-in above is for show — this system has no user store, and adding
+        one would put a second, weaker path to the same data beside the signed
+        one. Mint a token with <code>issue(tenant, role)</code> from
+        <code>prayas.console.auth</code>.
+      </p>
+    </div>
+  </main>
+
 </div>
-{% endblock %}
+<script>
+  /* Decorative controls point at the one that works, rather than doing
+     nothing at all — a dead button on a login page reads as a broken page. */
+  (function () {
+    "use strict";
+    var nudge = document.getElementById("nudge");
+    var demo  = document.querySelector(".demo");
+    var box   = demo && demo.querySelector("textarea");
+
+    function point(evt) {
+      if (evt) evt.preventDefault();
+      if (nudge) nudge.hidden = false;
+      if (!demo) return;
+      demo.classList.remove("lit");
+      void demo.offsetWidth;               /* restart the animation */
+      demo.classList.add("lit");
+      demo.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (box) setTimeout(function () { box.focus(); }, 320);
+    }
+
+    var targets = document.querySelectorAll("[data-nudge], [data-nudge-link]");
+    for (var i = 0; i < targets.length; i++) {
+      targets[i].addEventListener("click", point);
+    }
+  })();
+</script>
+</body>
+</html>

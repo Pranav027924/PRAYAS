@@ -58,9 +58,9 @@
       {% for m in g.markers %}
       <g class="mk {{ m.kind }} {{ 'deny' if m.verdict and m.verdict != 'ALLOW' }} {{ 'pending' if m.pending }}">
         <line x1="{{ '%.1f'|format(m.x) }}" y1="{{ g.axis_y }}"
-              x2="{{ '%.1f'|format(m.x) }}" y2="{{ 26 - m.row * 9 }}"></line>
+              x2="{{ '%.1f'|format(m.x) }}" y2="{{ 45 - m.row * 14 }}"></line>
         <circle cx="{{ '%.1f'|format(m.x) }}" cy="{{ g.axis_y }}" r="4"></circle>
-        <text x="{{ '%.1f'|format(m.x) }}" y="{{ 21 - m.row * 9 }}"
+        <text x="{{ '%.1f'|format(m.x) }}" y="{{ 40 - m.row * 14 }}"
               text-anchor="middle">{{ ist(m.at, "%d %b %H:%M") }}{{ ' (scheduled)' if m.pending }}</text>
       </g>
       {% endfor %}
