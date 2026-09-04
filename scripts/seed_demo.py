@@ -169,6 +169,10 @@ HERO_AMOUNT: Final = 249900
 #: people would challenge.
 LIVE_CAPTURE_RATE: Final = 0.70
 
+#: `scheduled_actions.action_type` values settle() drives, named rather than
+#: spelled twice — the notice constant is the executor's own.
+ACTION_TYPE_DEBIT: Final = "debit_attempt"
+
 HISTORY_DAYS: Final = 90
 
 
@@ -703,73 +707,95 @@ async def settle(rounds: int = 60) -> None:
     Refusals arise on their own: a suppressed customer's notice is never sent
     (§24.6), so their debit finds no valid notice and is denied.
     """
+    from prayas.executor.notice import ACTION_TYPE_NOTICE
     from prayas.executor.provider import FakeProvider
     from prayas.executor.worker import drain_tenant
 
     engine = create_async_engine(os.environ["PRAYAS_DATABASE_URL_OWNER"])
     provider = FakeProvider()
     tenants = [str(spec["tenant_id"]) for spec in FLEET]
-    try:
-        for round_no in range(rounds):
-            async with engine.begin() as conn:
-                notices = await conn.execute(
-                    text(
-                        "UPDATE scheduled_actions SET fire_at = now() - interval '2 minutes'"
-                        " WHERE action_id IN (SELECT action_id FROM scheduled_actions"
-                        "   WHERE state = 'pending' AND action_type = 'pdn_notice'"
-                        "   ORDER BY fire_at LIMIT :limit)"
-                    ),
-                    {"limit": SETTLE_ROUND_BATCH},
-                )
-            if notices.rowcount:
-                # Pinned inside §30's 08:00-19:00 IST contact window. The gate
-                # now checks it, so seeding at the wall clock would silently
-                # produce a fleet with no notices whenever the run happened to
-                # start in the evening — and therefore no lawful debits either.
-                # `batch` matches the UPDATE above so this pass claims every
-                # notice it just made due, leaving none for the debit pass to
-                # inherit at the wrong instant (see SETTLE_ROUND_BATCH).
-                for tenant in tenants:
-                    await drain_tenant(
-                        engine, tenant, provider, batch=SETTLE_ROUND_BATCH, now=_contact_hour()
-                    )
 
-            # 25 hours after the *notice*, not after the wall clock. The gate
-            # computes `hours_since(pdn_sent_at)` from the instant it is given,
-            # and the notice was pinned to the contact window — anchoring the
-            # debit anywhere else makes the elapsed time whatever the operator's
-            # local hour happens to imply.
-            #
-            # Two passes: the bulk at the lawful hour, then a slice two hours
-            # later into NPCI's closed window (see LATE_FIRE_SLICE). Each pass
-            # claims exactly what it just made due, so neither inherits the
-            # other's instant.
-            debits = 0
+    async def _mark(action_type: str, limit: int, ago_seconds: int) -> int:
+        """Make the next `limit` pending actions of this type due, and say how
+        many there were. `make_interval` rather than an interpolated literal
+        so the offset stays a bind parameter like everything else."""
+        async with engine.begin() as conn:
+            marked = await conn.execute(
+                text(
+                    "UPDATE scheduled_actions"
+                    "   SET fire_at = now() - make_interval(secs => :ago)"
+                    " WHERE action_id IN (SELECT action_id FROM scheduled_actions"
+                    "   WHERE state = 'pending' AND action_type = :kind"
+                    "   ORDER BY fire_at LIMIT :limit)"
+                ),
+                {"kind": action_type, "limit": limit, "ago": ago_seconds},
+            )
+        return int(marked.rowcount or 0)
+
+    try:
+        # ── every notice first, to completion ────────────────────────────
+        #
+        # Notices and debits used to alternate inside one round, which paired
+        # them by *batch position* rather than by cycle: a debit could be
+        # marked due in the same round as a notice belonging to a different
+        # cycle entirely, fire before its own notice had been sent, and find
+        # `pdn_sent_at` null. How many landed that way depended on how the two
+        # orderings happened to line up, so consecutive reseeds of identical
+        # data produced anywhere from 543 to 1,069 allowed debits and swung
+        # `RBI-EMANDATE-PDN-24H` refusals between 149 and 585.
+        #
+        # Draining notices completely first removes the coupling. It does not
+        # remove the refusals worth having: a suppressed customer's notice is
+        # *refused* by the gate rather than left unsent, so `pdn_sent_at`
+        # stays null and their debit is still denied — §24.6's silence
+        # producing §30.1's refusal, which is the real condition.
+        sent = 0
+        for _ in range(rounds):
+            marked = await _mark(ACTION_TYPE_NOTICE, SETTLE_ROUND_BATCH, 120)
+            if not marked:
+                break
+            # Pinned inside §30's 08:00-19:00 IST contact window. The gate
+            # reads the clock, so seeding at the wall clock would silently
+            # produce a fleet with no notices whenever the run began in the
+            # evening — and therefore no lawful debits either.
+            for tenant in tenants:
+                await drain_tenant(
+                    engine, tenant, provider, batch=SETTLE_ROUND_BATCH, now=_contact_hour()
+                )
+            sent += marked
+        _say(f"    notices: {sent:,} sent")
+
+        # ── then every debit, 25 hours later by the gate's own arithmetic ──
+        #
+        # `hours_since(pdn_sent_at)` is computed from the instant the gate is
+        # given, and the notice was pinned to the contact window, so anchoring
+        # the debit anywhere else makes the elapsed time whatever the
+        # operator's local hour happens to imply.
+        fired = late_fired = 0
+        for _ in range(rounds):
+            # The bulk at the lawful hour, then a slice two hours later into
+            # NPCI's closed window (see LATE_FIRE_SLICE). Each pass claims
+            # exactly what it just marked, so neither inherits the other's
+            # instant.
+            round_total = 0
             for late, size in (
                 (False, SETTLE_ROUND_BATCH - LATE_FIRE_SLICE),
                 (True, LATE_FIRE_SLICE),
             ):
-                async with engine.begin() as conn:
-                    marked = await conn.execute(
-                        text(
-                            "UPDATE scheduled_actions SET fire_at = now() - interval '1 minute'"
-                            " WHERE action_id IN (SELECT a.action_id FROM scheduled_actions a"
-                            "   WHERE a.state = 'pending' AND a.action_type = 'debit_attempt'"
-                            "   ORDER BY a.fire_at LIMIT :limit)"
-                        ),
-                        {"limit": size},
-                    )
-                if not marked.rowcount:
+                marked = await _mark(ACTION_TYPE_DEBIT, size, 60)
+                if not marked:
                     continue
-                debits += marked.rowcount
                 for tenant in tenants:
                     await drain_tenant(
                         engine, tenant, provider, batch=size, now=_debit_hour(late=late)
                     )
-
-            if not notices.rowcount and not debits:
+                round_total += marked
+                if late:
+                    late_fired += marked
+            if not round_total:
                 break
-            _say(f"    round {round_no + 1}: {notices.rowcount} notices, {debits} debits")
+            fired += round_total
+        _say(f"    debits: {fired:,} fired ({late_fired:,} into the closed window)")
     finally:
         await engine.dispose()
 
