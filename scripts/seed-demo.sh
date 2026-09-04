@@ -24,6 +24,15 @@ START=$(date +%s)
 say "── reset ────────────────────────────────────────────────────────────"
 docker compose down -v >/dev/null 2>&1 || true
 docker compose up -d >/dev/null 2>&1
+# The planner and executor must not run while history is being ingested.
+# They fire at the *real* wall clock, so a notice and its debit both land
+# within the same few minutes of each other and `hours_since(pdn_sent_at)`
+# reads minutes rather than the 25 hours the settle stage arranges — the
+# debit is then correctly denied on RBI-EMANDATE-PDN-24H, and the fleet
+# ends up with hundreds of refusals that are artefacts of seeding rather
+# than of anything the engine decided. Both are driven in-process below,
+# under a pinned clock, and restarted at the end for the demo itself.
+docker compose stop planner executor >/dev/null 2>&1 || true
 for _ in $(seq 1 60); do
   [ "$(docker inspect prayas-api-1 --format '{{.State.Health.Status}}' 2>/dev/null)" = "healthy" ] && break
   sleep 2
@@ -72,13 +81,11 @@ say "── plan ─────────────────────
 # The planner runs in-process here: it is the same `worker.tick`, but the
 # service polls every 15 s, which would turn seeding into twenty minutes of
 # waiting. The container keeps running for the demo itself.
-docker compose stop planner >/dev/null 2>&1
 uv run python scripts/seed_demo.py --stage plan
 
 say
 say "── settle ───────────────────────────────────────────────────────────"
 say "  notices first, then debits 25 virtual hours later"
-docker compose stop executor >/dev/null 2>&1
 uv run python scripts/seed_demo.py --stage settle
 docker compose up -d planner executor >/dev/null 2>&1
 
