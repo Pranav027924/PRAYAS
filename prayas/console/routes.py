@@ -704,16 +704,26 @@ async def portfolio_screen(
     request: Request,
     who: Annotated[Principal, Depends(principal)],
     tenant: Annotated[str | None, Query()] = None,
+    window: Annotated[str, Query()] = "30d",
 ) -> HTMLResponse:
     """**Screen 1.** The matched pair, efficiency, guardrails, rails, live.
 
     Renders the same payloads `/v1/portfolio/summary` returns — the screen has
     no second source of truth, so a number on the page and a number in the API
     cannot drift apart.
+
+    `window` was fixed at 30 days here while the API had taken it as a
+    parameter all along, so the two disagreed about what they could show: at
+    30 days FitFirst's survival interval is [-0.46, +4.17] and *includes
+    zero*, while at 90 it is [+1.34, +4.26] and does not. The screen could
+    only ever render the first, and §R4.1's own layout draws a "Last 30 days"
+    selector in the header — the control was specified and never wired up.
+    Found in Phase 7 by reading the figures off the screen against the
+    script, which is exactly what that pass is for.
     """
     from prayas.console.format import ist, lakh, pct, rupees
 
-    summary = await portfolio_summary(request, who, tenant=tenant, window="30d")
+    summary = await portfolio_summary(request, who, tenant=tenant, window=window)
     fleet = await tenants(request, who)
     stream = await events_stream(request, who)
     name = next((t["name"] for t in fleet if t["tenant_id"] == who.tenant_id), who.tenant_id)
@@ -728,6 +738,10 @@ async def portfolio_screen(
             "tenants": fleet,
             "stage": summary["stage"],
             "window": summary["window"],
+            # Carried into the nav so switching tenants does not silently
+            # drop the window back to the default — the two views answer
+            # different questions and the URL should keep saying which.
+            "window_q": f"&window={window}" if window != "30d" else "",
             "pair": summary["matched_pair"],
             "eff": summary["efficiency"],
             "guardrails": summary["guardrails"],
