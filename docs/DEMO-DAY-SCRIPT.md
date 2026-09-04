@@ -75,8 +75,8 @@ Read exactly what the screen prints:
 
 | What you say | What is on screen |
 |---|---|
-| Incremental recovery | **₹25,75,219** |
-| 95% CI | **₹24.3L – ₹27.2L** — excludes zero |
+| Incremental recovery | **₹25,66,156** |
+| 95% CI | **₹24.2L – ₹27.1L** — excludes zero |
 | Incremental survival | **+2.8%** |
 | 95% CI | **+1.3% – +4.3%** — excludes zero |
 | Holdout | **922** (15%), against **5,198** treated |
@@ -146,7 +146,7 @@ Header reads **FitFirst · ₹2,499 · UPI Autopay · treatment arm**, budget
 
 | When | What |
 |---|---|
-| **02 Sep 04:15** | Payment failed |
+| **02 Sep 07:32** | Payment failed |
 | **04 Sep 08:30** | Pre-debit notice sent |
 | **05 Sep 09:30** | Debit fired — **25h of notice, floor is 24h** |
 | **05 Sep 09:33** | Payment captured |
@@ -189,13 +189,14 @@ Expect **401**.
 
 > Unverified payloads are never persisted — not stored-then-checked.
 
-Then the ledger's refusals. This fleet carries **279 genuine refusals**, none
-of them manufactured:
+Then the ledger's refusals. This fleet carries **222 genuine refusals**, none
+of them manufactured — 1,026 of 1,246 debits were allowed, so the gate is
+refusing about one in six:
 
 | Rule | Refusals |
 |---|---|
-| `RBI-EMANDATE-PDN-24H` | 149 |
-| `NPCI-AUTOPAY-WINDOW` | 99 |
+| `NPCI-AUTOPAY-WINDOW` | 98 |
+| `RBI-EMANDATE-PDN-24H` | 93 |
 | `DPDP-CONSENT-VALID` | 30 |
 | `RBI-EMANDATE-AFA-CAP` | 1 |
 
@@ -229,7 +230,7 @@ At `tenant=all&window=90d`, exactly as printed:
 |---|---|---|
 | Compliance violations | **0** ✓ | must be zero |
 | Revocation vs control | **−2.80% pts** ✓ | not above control |
-| Net value | **₹33,87,458** ✓ | must be positive |
+| Net value | **₹33,99,712** ✓ | must be positive |
 
 > Zero violations. Revocation below control. Net value positive. All reported
 > unprompted, including when unflattering.
@@ -271,7 +272,7 @@ rather than a gap:
 
 ## One number to decide before you walk in
 
-FitFirst's treated arm recovers **84.3%** of failed cycles against a holdout of
+FitFirst's treated arm recovers **84.1%** of failed cycles against a holdout of
 **17.4%** — a 67-point lift. §R3.2 of the build spec targets ~62% treatment
 recovery precisely because *"a perfect rate reads as fabricated and invites the
 wrong kind of scrutiny."*
