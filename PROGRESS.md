@@ -1707,6 +1707,28 @@ Hashes are shown head-and-tail: the middle carries nothing a reader can use, and
 
 **The pattern across all five.** Every one was found by looking at the seeded fleet's numbers rather than by a failing test, and three of them were *created* by the fix before them. The seeder is the only place where the engine's real clocks, batches and gates all interact under a compressed timeline, and it had no assertions of its own — which is why a 100%-denial rate could survive a green 1,470-test suite.
 
+### FINDING-P17-24 · 2026-09-04 · ✅ RESOLVED — the screen could not render the view the script quoted
+
+**Observed.** Reading §H1 beat 2 aloud against the screen, as Phase 7 requires. The line is *"the confidence interval excludes zero"*. The screen showed FitFirst's survival interval as **−0.5% to +4.2%**.
+
+**Cause.** `portfolio_screen` hard-coded `window="30d"` while `/v1/portfolio/summary` had taken `window` as a parameter all along. Over 30 days that interval genuinely spans zero; over 90 it is [+1.34, +4.26] and does not. The screen could only ever render the first. §R4.1's layout draws a "Last 30 days ⌄" selector in the header — the control was specified and never wired up, so nobody could reach the view the script was written against.
+
+**Fix.** The page takes `window`, and carries it through the tenant nav so switching merchants does not silently drop back to 30 days. The demo script names the URL for each beat.
+
+**Why this one matters out of proportion to its size.** It is a one-line default, and it would have put a false statistical claim in the presenter's mouth in front of the one audience equipped to catch it. Nothing else in the build — not the tests, not the API, not the metrics module, all of which were correct — could have caught it. Only reading the figures off the screen against the words could, which is exactly the pass §H1 prescribes and the reason it is a phase task rather than a nicety.
+
+### ADR-109 · 2026-09-04 · The demo script carries the numbers, and a script that re-reads them
+
+**Decision:** `docs/DEMO-DAY-SCRIPT.md` and `scripts/verify_demo_numbers.py`.
+
+The build spec's §H1 quotes illustrative figures (₹18.4L, +4.1 pts, 62% treatment recovery). Phase 7's instruction is *correct the script, not the data*, so the committed script carries what the stack actually renders — screen-exact, down to the rounding the page applies, with the URL for each beat.
+
+**It also records what the screen will not show, and why.** Suppressed intervals at fleet scope (intervals do not add), suppressed survival for a canary tenant whose holdout is empty, two efficiency metrics reading *not measured*. Each is a deliberate refusal to state something the data cannot support — which is the same argument the demo is making, so being caught unprepared by one in the room would be the worst possible way to encounter it.
+
+**The verification script exists because the fleet does not survive a test run.** CI truncates the tenant tables as a fixture side effect, so `ci-local.sh` leaves the demo empty. `verify_demo_numbers.py` re-reads every quoted figure off the live API at both windows, says which side of zero each interval falls on, and exits non-zero if the fleet is empty or the hero cycle shows no recovery.
+
+**One number is left as the operator's call, not settled in code.** FitFirst's treated arm recovers 84.3% against a 17.4% holdout. §R3.2 targets ~62% precisely because a rate that high "reads as fabricated". Lowering it means retuning `TREATMENT_RECOVERY`, a constant set in an earlier phase with its own recorded rationale — a presentation-conservatism judgement rather than a defect, and not one to make unilaterally hours before the room. The script states the trade-off and both remedies.
+
 ## Spec errata found (documentation only, no code impact)
 
 - **§4 (line 193) cites "§21.4" for reply parsing residency.** §21 is the liquidity hazard model and has no subsections; the content is in **§41.3**. Found in Phase 13.
